@@ -2,6 +2,7 @@ import express from 'express';
 import http from 'http';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import path from 'path';
 import zaloRoutes from './routes/zaloRoutes';
 import { initSocketServer } from './sockets/zaloSocket';
 import { ZaloClientManager } from './services/ZaloClientManager';
@@ -14,6 +15,9 @@ const PORT = process.env.PORT || 5000;
 // Middleware
 app.use(cors({ origin: '*' }));
 app.use(express.json());
+
+// Serve static uploaded files
+app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));
 
 // Routes
 app.use('/api/zalo', zaloRoutes);
