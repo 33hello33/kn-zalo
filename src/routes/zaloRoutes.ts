@@ -104,6 +104,14 @@ router.get('/groups', async (req: Request, res: Response) => {
   }
 });
 
+function parseThreadType(threadType: any): number | undefined {
+  if (threadType === undefined || threadType === null || threadType === '') return undefined;
+  if (threadType === 'group' || threadType === '1' || threadType === 1) return 1;
+  if (threadType === 'user' || threadType === '0' || threadType === 0) return 0;
+  const num = Number(threadType);
+  return isNaN(num) ? undefined : num;
+}
+
 /**
  * POST /api/zalo/send-message
  * Gửi tin nhắn văn bản
@@ -119,7 +127,7 @@ router.post('/send-message', async (req: Request, res: Response) => {
       });
     }
 
-    const typeNum = threadType !== undefined ? Number(threadType) : undefined;
+    const typeNum = parseThreadType(threadType);
     const result = await clientManager.sendMessage(threadId, message, typeNum);
     return res.json({
       success: true,
@@ -151,7 +159,7 @@ router.post('/send-image', upload.single('file'), async (req: Request, res: Resp
     }
 
     tempFilePath = file.path;
-    const typeNum = threadType !== undefined ? Number(threadType) : undefined;
+    const typeNum = parseThreadType(threadType);
     const result = await clientManager.sendImage(threadId, tempFilePath, typeNum, caption);
 
     return res.json({
@@ -190,7 +198,7 @@ router.post('/send-file', upload.single('file'), async (req: Request, res: Respo
     }
 
     tempFilePath = file.path;
-    const typeNum = threadType !== undefined ? Number(threadType) : undefined;
+    const typeNum = parseThreadType(threadType);
     const result = await clientManager.sendFile(threadId, tempFilePath, typeNum);
 
     return res.json({
