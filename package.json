@@ -16,7 +16,7 @@
     "express": "^4.19.2",
     "image-size": "^1.1.1",
     "socket.io": "^4.7.5",
-    "zca-js": "^1.4.0"
+    "zca-js": "^2.1.2"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",

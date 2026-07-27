@@ -1,4 +1,5 @@
-import { API, LoginQRCallbackEventType, Zalo } from 'zca-js';
+import { API, Zalo } from 'zca-js';
+import { LoginQRCallbackEventType } from 'zca-js/dist/apis/loginQR.js';
 import { ZaloSessionStore, ZaloSessionData } from './ZaloSessionStore';
 import { broadcastQRUpdate, broadcastStatusChange, broadcastNewMessage } from '../sockets/zaloSocket';
 import fs from 'fs';
@@ -157,7 +158,7 @@ export class ZaloClientManager {
       const zalo = new Zalo(this.createZaloConfig());
       const parsedCookies = JSON.parse(session.cookies);
 
-      const api = await zalo.loginCookie({
+      const api = await zalo.login({
         cookie: parsedCookies,
         imei: session.imei,
         userAgent: session.user_agent,
@@ -195,13 +196,13 @@ export class ZaloClientManager {
   private startMessageListener(api: API) {
     try {
       api.listener.on('message', (message: any) => {
-        console.log('[ZaloListener] New Direct Message:', message);
-        broadcastNewMessage({ type: 'user_message', data: message });
+        console.log('[ZaloListener] New Message:', message);
+        broadcastNewMessage({ type: 'zalo_message', data: message });
       });
 
-      api.listener.on('group_message', (message: any) => {
-        console.log('[ZaloListener] New Group Message:', message);
-        broadcastNewMessage({ type: 'group_message', data: message });
+      api.listener.on('group_event', (eventData: any) => {
+        console.log('[ZaloListener] Group Event:', eventData);
+        broadcastNewMessage({ type: 'group_event', data: eventData });
       });
 
       api.listener.start();
