@@ -401,6 +401,49 @@ export class ZaloClientManager {
   }
 
   /**
+   * Search user/contact by phone number and resolve alias (tên gợi nhớ)
+   */
+  public async findUserByPhone(phone: string) {
+    if (!this.api) {
+      throw new Error('Chưa đăng nhập Zalo.');
+    }
+
+    // 1. Call Zalo API findUser
+    const foundUser: any = await (this.api as any).findUser(phone);
+    if (!foundUser) {
+      return null;
+    }
+
+    const userId = foundUser.userId || foundUser.uid || foundUser.id;
+    let displayName = foundUser.displayName || foundUser.name || foundUser.zaloName || '';
+    let avatarUrl = foundUser.avatar || foundUser.avatarUrl || foundUser.avatar_url || '';
+    let alias = foundUser.alias || '';
+
+    // 2. Check in friend list to get alias (tên gợi nhớ) if available
+    try {
+      const friends: any[] = await this.api.getAllFriends();
+      const friend = friends.find((f: any) => (f.userId || f.uid || f.id || f.user_id || f.contact_id) === userId);
+      if (friend) {
+        if (friend.alias) alias = friend.alias;
+        if (!displayName) displayName = friend.displayName || friend.name || friend.zaloName || '';
+        if (!avatarUrl) avatarUrl = friend.avatar || friend.avatarUrl || '';
+      }
+    } catch {}
+
+    const resolvedName = alias || displayName || phone;
+
+    return {
+      userId,
+      phone,
+      displayName,
+      alias,
+      resolvedName, // Tên gợi nhớ nếu có, ưu tiên trên tên Zalo
+      avatarUrl,
+      raw: foundUser,
+    };
+  }
+
+  /**
    * Logout current user
    */
   public async logout() {

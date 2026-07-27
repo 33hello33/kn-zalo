@@ -95,6 +95,43 @@ router.get('/friends', async (req: Request, res: Response) => {
 });
 
 /**
+ * GET /api/zalo/search-phone?phone=0xxxxxxxxx
+ * Tìm kiếm người dùng theo số điện thoại và lấy tên gợi nhớ (alias)
+ */
+router.get('/search-phone', async (req: Request, res: Response) => {
+  try {
+    const phone = req.query.phone as string;
+    if (!phone) {
+      return res.status(400).json({
+        success: false,
+        error: 'Thiếu tham số query phone',
+      });
+    }
+
+    const contact = await clientManager.findUserByPhone(phone);
+    if (!contact) {
+      return res.json({
+        success: true,
+        found: false,
+        message: 'Không tìm thấy người dùng với số điện thoại này',
+        contact: null,
+      });
+    }
+
+    return res.json({
+      success: true,
+      found: true,
+      contact,
+    });
+  } catch (error: any) {
+    return res.status(500).json({
+      success: false,
+      error: error.message || 'Lỗi khi tìm kiếm người dùng theo số điện thoại',
+    });
+  }
+});
+
+/**
  * GET /api/zalo/groups
  * Lấy danh sách nhóm
  */

@@ -22,6 +22,7 @@ npm install socket.io-client axios
 | `GET` | `/api/zalo/status` | Kiểm tra trạng thái đăng nhập | None |
 | `GET` | `/api/zalo/friends` | Lấy danh bạ bạn bè | None |
 | `GET` | `/api/zalo/groups` | Lấy danh sách nhóm | None |
+| `GET` | `/api/zalo/search-phone` | Tìm kiếm người dùng theo SĐT (tự động lấy tên gợi nhớ/alias) | Query: `?phone=0xxxxxxxxx` |
 | `POST` | `/api/zalo/send-message` | Gửi tin nhắn văn bản | `{ threadId, message, threadType }` |
 | `POST` | `/api/zalo/send-image` | Gửi hình ảnh | FormData: `file`, `threadId`, `threadType`, `caption` |
 | `POST` | `/api/zalo/send-file` | Gửi file đính kèm | FormData: `file`, `threadId`, `threadType` |
@@ -32,7 +33,33 @@ npm install socket.io-client axios
 
 ---
 
-## 3. Code Mẫu Gửi File & Hình Ảnh
+## 3. Code Mẫu Tra Cứu Số Điện Thoại (Lấy Tên Gợi Nhớ / Alias)
+
+```javascript
+// Tìm kiếm liên hệ Zalo theo số điện thoại & lấy tên gợi nhớ (Alias)
+async function searchContactByPhone(phoneNumber) {
+  try {
+    const res = await axios.get(`http://localhost:5000/api/zalo/search-phone?phone=${phoneNumber}`);
+    if (res.data.success && res.data.found) {
+      const contact = res.data.contact;
+      console.log('Tên hiển thị ưu tiên (Alias):', contact.resolvedName);
+      console.log('Tên Zalo gốc:', contact.displayName);
+      console.log('Tên gợi nhớ (Alias):', contact.alias);
+      console.log('Avatar URL:', contact.avatarUrl);
+      console.log('User ID:', contact.userId);
+      return contact;
+    }
+    return null;
+  } catch (err) {
+    console.error('Lỗi khi tra cứu số điện thoại:', err);
+    return null;
+  }
+}
+```
+
+---
+
+## 4. Code Mẫu Gửi File & Hình Ảnh
 
 ```javascript
 // Gửi hình ảnh qua API
@@ -63,7 +90,7 @@ async function sendZaloFile(threadId, fileObject) {
 
 ---
 
-## 4. Code Mẫu Lấy Lịch Sử Chat & Danh Sách Hội Thoại
+## 5. Code Mẫu Lấy Lịch Sử Chat & Danh Sách Hội Thoại
 
 ```javascript
 // Lấy 50 tin nhắn gần nhất của Nhóm Chat
@@ -116,6 +143,8 @@ export default function ZaloChatApp() {
   const [messageText, setMessageText] = useState('');
   const [messages, setMessages] = useState([]);
   const [fileInput, setFileInput] = useState(null);
+  const [searchPhone, setSearchPhone] = useState('');
+  const [searchResult, setSearchResult] = useState(null);
 
   useEffect(() => {
     loadContacts();
@@ -156,6 +185,21 @@ export default function ZaloChatApp() {
     }
   };
 
+  const handleSearchPhone = async (phone) => {
+    if (!phone) return;
+    try {
+      const res = await axios.get(`http://localhost:5000/api/zalo/search-phone?phone=${phone}`);
+      if (res.data.success && res.data.found) {
+        setSearchResult(res.data.contact);
+      } else {
+        alert('Không tìm thấy liên hệ với SĐT này!');
+        setSearchResult(null);
+      }
+    } catch (err) {
+      alert('Lỗi tra cứu SĐT: ' + (err.response?.data?.error || err.message));
+    }
+  };
+
   const handleSendFileOrImage = async (e) => {
     const file = e.target.files[0];
     if (!file || !selectedThreadId) return;
@@ -180,12 +224,33 @@ export default function ZaloChatApp() {
   return (
     <div style={{ display: 'flex', gap: 20, padding: 20 }}>
       {/* Sidebar danh sách */}
-      <div style={{ width: 250, borderRight: '1px solid #ccc' }}>
+      <div style={{ width: 280, borderRight: '1px solid #ccc', paddingRight: 10 }}>
+        {/* Tìm kiếm SĐT */}
+        <h4>Tra Cứu Theo SĐT</h4>
+        <div style={{ display: 'flex', gap: 5, marginBottom: 15 }}>
+          <input
+            type="text"
+            placeholder="Nhập SĐT 0xxx..."
+            value={searchPhone}
+            onChange={(e) => setSearchPhone(e.target.value)}
+            style={{ flex: 1, padding: 5 }}
+          />
+          <button onClick={() => handleSearchPhone(searchPhone)}>Tìm</button>
+        </div>
+
+        {searchResult && (
+          <div style={{ background: '#f0f8ff', padding: 10, borderRadius: 5, marginBottom: 15 }}>
+            <p style={{ margin: '0 0 5px 0' }}><strong>Tên gợi nhớ (Alias):</strong> {searchResult.resolvedName}</p>
+            <p style={{ margin: '0 0 5px 0', fontSize: 12, color: '#666' }}>Tên Zalo: {searchResult.displayName}</p>
+            <button onClick={() => handleSelectThread(searchResult.userId, false)}>Chat Ngay</button>
+          </div>
+        )}
+
         <h4>Bạn Bè</h4>
         <ul>
           {friends.map(f => (
             <li key={f.userId} onClick={() => handleSelectThread(f.userId, false)} style={{ cursor: 'pointer' }}>
-              {f.displayName || f.userId}
+              {f.alias || f.displayName || f.userId}
             </li>
           ))}
         </ul>
