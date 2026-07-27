@@ -1,8 +1,20 @@
 import { Router, Request, Response } from 'express';
+import multer from 'multer';
+import fs from 'fs';
+import path from 'path';
 import { ZaloClientManager } from '../services/ZaloClientManager';
+import { ZaloMessageStore } from '../services/ZaloMessageStore';
 
 const router = Router();
 const clientManager = ZaloClientManager.getInstance();
+
+// Cấu hình Multer lưu file tạm vào folder 'uploads/'
+const uploadDir = path.join(process.cwd(), 'uploads');
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir, { recursive: true });
+}
+
+const upload = multer({ dest: uploadDir });
 
 /**
  * GET /api/zalo/qr
@@ -20,7 +32,6 @@ router.get('/qr', async (req: Request, res: Response) => {
       });
     }
 
-    // Generate/fetch QR
     const result = await clientManager.generateQRLogin();
     return res.json({
       success: true,
@@ -95,7 +106,7 @@ router.get('/groups', async (req: Request, res: Response) => {
 
 /**
  * POST /api/zalo/send-message
- * Nhận nội dung từ Web và gọi ZaloClientManager.sendMessage(...)
+ * Gửi tin nhắn văn bản
  */
 router.post('/send-message', async (req: Request, res: Response) => {
   try {
@@ -108,7 +119,8 @@ router.post('/send-message', async (req: Request, res: Response) => {
       });
     }
 
-    const result = await clientManager.sendMessage(threadId, message, threadType);
+    const typeNum = threadType !== undefined ? Number(threadType) : undefined;
+    const result = await clientManager.sendMessage(threadId, message, typeNum);
     return res.json({
       success: true,
       result,
@@ -117,6 +129,150 @@ router.post('/send-message', async (req: Request, res: Response) => {
     return res.status(500).json({
       success: false,
       error: error.message || 'Gửi tin nhắn thất bại',
+    });
+  }
+});
+
+/**
+ * POST /api/zalo/send-image
+ * Gửi hình ảnh đính kèm (multipart/form-data: field name là 'file' hoặc 'image')
+ */
+router.post('/send-image', upload.single('file'), async (req: Request, res: Response) => {
+  let tempFilePath = '';
+  try {
+    const file = req.file;
+    const { threadId, threadType, caption } = req.body;
+
+    if (!file || !threadId) {
+      return res.status(400).json({
+        success: false,
+        error: 'Thiếu file ảnh hoặc tham số threadId',
+      });
+    }
+
+    tempFilePath = file.path;
+    const typeNum = threadType !== undefined ? Number(threadType) : undefined;
+    const result = await clientManager.sendImage(threadId, tempFilePath, typeNum, caption);
+
+    return res.json({
+      success: true,
+      result,
+    });
+  } catch (error: any) {
+    return res.status(500).json({
+      success: false,
+      error: error.message || 'Gửi ảnh thất bại',
+    });
+  } finally {
+    if (tempFilePath && fs.existsSync(tempFilePath)) {
+      try {
+        fs.unlinkSync(tempFilePath);
+      } catch {}
+    }
+  }
+});
+
+/**
+ * POST /api/zalo/send-file
+ * Gửi file tài liệu (multipart/form-data: field name là 'file')
+ */
+router.post('/send-file', upload.single('file'), async (req: Request, res: Response) => {
+  let tempFilePath = '';
+  try {
+    const file = req.file;
+    const { threadId, threadType } = req.body;
+
+    if (!file || !threadId) {
+      return res.status(400).json({
+        success: false,
+        error: 'Thiếu file đính kèm hoặc tham số threadId',
+      });
+    }
+
+    tempFilePath = file.path;
+    const typeNum = threadType !== undefined ? Number(threadType) : undefined;
+    const result = await clientManager.sendFile(threadId, tempFilePath, typeNum);
+
+    return res.json({
+      success: true,
+      result,
+    });
+  } catch (error: any) {
+    return res.status(500).json({
+      success: false,
+      error: error.message || 'Gửi file thất bại',
+    });
+  } finally {
+    if (tempFilePath && fs.existsSync(tempFilePath)) {
+      try {
+        fs.unlinkSync(tempFilePath);
+      } catch {}
+    }
+  }
+});
+
+/**
+ * GET /api/zalo/messages/group/:groupId
+ * Lấy lịch sử 50 tin nhắn nhóm mới nhất từ Zalo
+ */
+router.get('/messages/group/:groupId', async (req: Request, res: Response) => {
+  try {
+    const { groupId } = req.params;
+    const count = req.query.count ? Number(req.query.count) : 50;
+
+    const history = await clientManager.getGroupChatHistory(groupId, count);
+    return res.json({
+      success: true,
+      count: Array.isArray(history) ? history.length : 0,
+      messages: history,
+    });
+  } catch (error: any) {
+    return res.status(500).json({
+      success: false,
+      error: error.message || 'Không thể lấy lịch sử tin nhắn nhóm',
+    });
+  }
+});
+
+/**
+ * GET /api/zalo/messages/user/:friendId
+ * Lấy lịch sử tin nhắn với bạn bè từ Supabase (hoặc Local fallback)
+ */
+router.get('/messages/user/:friendId', async (req: Request, res: Response) => {
+  try {
+    const { friendId } = req.params;
+    const limit = req.query.limit ? Number(req.query.limit) : 50;
+
+    const messages = await ZaloMessageStore.getMessagesByThread(friendId, limit);
+    return res.json({
+      success: true,
+      messages,
+    });
+  } catch (error: any) {
+    return res.status(500).json({
+      success: false,
+      error: error.message || 'Không thể lấy lịch sử tin nhắn bạn bè',
+    });
+  }
+});
+
+/**
+ * GET /api/zalo/conversations
+ * Lấy danh sách cuộc hội thoại chat gần đây từ Supabase
+ */
+router.get('/conversations', async (req: Request, res: Response) => {
+  try {
+    const limit = req.query.limit ? Number(req.query.limit) : 20;
+    const conversations = await ZaloMessageStore.getRecentConversations(limit);
+
+    return res.json({
+      success: true,
+      conversations,
+    });
+  } catch (error: any) {
+    return res.status(500).json({
+      success: false,
+      error: error.message || 'Không thể lấy danh sách cuộc hội thoại',
     });
   }
 });

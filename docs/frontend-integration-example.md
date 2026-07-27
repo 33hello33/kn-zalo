@@ -14,7 +14,80 @@ npm install socket.io-client axios
 
 ---
 
-## 2. Tạo Service Khởi Tạo Socket.IO (`src/services/zaloSocketClient.js`)
+## 2. Danh Sách REST APIs
+
+| Method | Endpoint | Mô Tả | Payload / Multipart |
+| :--- | :--- | :--- | :--- |
+| `GET` | `/api/zalo/qr` | Lấy dữ liệu ảnh QR đăng nhập | None |
+| `GET` | `/api/zalo/status` | Kiểm tra trạng thái đăng nhập | None |
+| `GET` | `/api/zalo/friends` | Lấy danh bạ bạn bè | None |
+| `GET` | `/api/zalo/groups` | Lấy danh sách nhóm | None |
+| `POST` | `/api/zalo/send-message` | Gửi tin nhắn văn bản | `{ threadId, message, threadType }` |
+| `POST` | `/api/zalo/send-image` | Gửi hình ảnh | FormData: `file`, `threadId`, `threadType`, `caption` |
+| `POST` | `/api/zalo/send-file` | Gửi file đính kèm | FormData: `file`, `threadId`, `threadType` |
+| `GET` | `/api/zalo/messages/group/:groupId` | Lấy 50 tin nhắn gần nhất của Nhóm | Query: `?count=50` |
+| `GET` | `/api/zalo/messages/user/:friendId` | Lấy lịch sử tin nhắn bạn bè từ Supabase | Query: `?limit=50` |
+| `GET` | `/api/zalo/conversations` | Lấy danh sách cuộc hội thoại vừa chat | Query: `?limit=20` |
+| `POST` | `/api/zalo/logout` | Đăng xuất tài khoản Zalo | None |
+
+---
+
+## 3. Code Mẫu Gửi File & Hình Ảnh
+
+```javascript
+// Gửi hình ảnh qua API
+async function sendZaloImage(threadId, fileObject, caption = '') {
+  const formData = new FormData();
+  formData.append('file', fileObject);
+  formData.append('threadId', threadId);
+  formData.append('caption', caption);
+
+  const res = await axios.post('http://localhost:5000/api/zalo/send-image', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' }
+  });
+  return res.data;
+}
+
+// Gửi file tài liệu qua API
+async function sendZaloFile(threadId, fileObject) {
+  const formData = new FormData();
+  formData.append('file', fileObject);
+  formData.append('threadId', threadId);
+
+  const res = await axios.post('http://localhost:5000/api/zalo/send-file', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' }
+  });
+  return res.data;
+}
+```
+
+---
+
+## 4. Code Mẫu Lấy Lịch Sử Chat & Danh Sách Hội Thoại
+
+```javascript
+// Lấy 50 tin nhắn gần nhất của Nhóm Chat
+async function fetchGroupMessages(groupId) {
+  const res = await axios.get(`http://localhost:5000/api/zalo/messages/group/${groupId}?count=50`);
+  return res.data.messages; // Danh sách 50 tin nhắn Zalo
+}
+
+// Lấy lịch sử tin nhắn bạn bè từ Supabase
+async function fetchUserMessages(friendId) {
+  const res = await axios.get(`http://localhost:5000/api/zalo/messages/user/${friendId}?limit=50`);
+  return res.data.messages;
+}
+
+// Lấy danh sách hội thoại vừa chat gần đây
+async function fetchRecentConversations() {
+  const res = await axios.get('http://localhost:5000/api/zalo/conversations');
+  return res.data.conversations;
+}
+```
+
+---
+
+## 5. Service Socket.IO Realtime (`src/services/zaloSocketClient.js`)
 
 ```javascript
 import { io } from 'socket.io-client';
@@ -29,86 +102,7 @@ export const socket = io(BACKEND_URL, {
 
 ---
 
-## 3. Component Hiển Thị QR Code & Đăng Nhập (`ZaloQRLogin.jsx`)
-
-```jsx
-import React, { useEffect, useState } from 'react';
-import axios from 'axios';
-import { socket } from '../services/zaloSocketClient';
-
-export default function ZaloQRLogin({ onLoginSuccess }) {
-  const [qrCode, setQrCode] = useState('');
-  const [status, setStatus] = useState('idle');
-
-  useEffect(() => {
-    // 1. Kiểm tra trạng thái đã đăng nhập hay chưa
-    axios.get('http://localhost:5000/api/zalo/status')
-      .then(res => {
-        if (res.data.isLoggedIn) {
-          setStatus('success');
-          if (onLoginSuccess) onLoginSuccess(res.data.user);
-        } else {
-          // Gọi API khởi tạo QR
-          fetchQR();
-        }
-      });
-
-    // 2. Lắng nghe event QR update từ WebSockets realtime
-    socket.on('zalo-qr-update', (data) => {
-      console.log('QR status updated:', data.status);
-      if (data.qr) setQrCode(data.qr);
-      setStatus(data.status);
-
-      if (data.status === 'success') {
-        alert('Đăng nhập Zalo thành công!');
-        if (onLoginSuccess) onLoginSuccess();
-      }
-    });
-
-    return () => {
-      socket.off('zalo-qr-update');
-    };
-  }, []);
-
-  const fetchQR = async () => {
-    try {
-      const res = await axios.get('http://localhost:5000/api/zalo/qr');
-      if (res.data.qr) {
-        setQrCode(res.data.qr);
-      }
-      setStatus(res.data.status);
-    } catch (err) {
-      console.error('Lỗi khi lấy QR:', err);
-      setStatus('error');
-    }
-  };
-
-  return (
-    <div style={{ textAlign: 'center', padding: 20 }}>
-      <h3>Đăng Nhập Zalo Bằng Mã QR</h3>
-      {status === 'waiting' && qrCode && (
-        <div>
-          <img src={qrCode} alt="Zalo QR Code" style={{ width: 250, height: 250 }} />
-          <p>Mở ứng dụng Zalo trên điện thoại để quét mã</p>
-        </div>
-      )}
-
-      {status === 'scanned' && <p>✅ Đã quét mã thành công! Vui lòng xác nhận trên điện thoại...</p>}
-      {status === 'expired' && (
-        <div>
-          <p>❌ Mã QR đã hết hạn.</p>
-          <button onClick={fetchQR}>Tạo lại mã QR</button>
-        </div>
-      )}
-      {status === 'success' && <p>🎉 Bạn đã đăng nhập Zalo thành công!</p>}
-    </div>
-  );
-}
-```
-
----
-
-## 4. Component Chat & Lắng Nghe Tin Nhắn Realtime (`ZaloChatApp.jsx`)
+## 6. Component Chat Demo (`ZaloChatApp.jsx`)
 
 ```jsx
 import React, { useEffect, useState } from 'react';
@@ -121,16 +115,12 @@ export default function ZaloChatApp() {
   const [selectedThreadId, setSelectedThreadId] = useState('');
   const [messageText, setMessageText] = useState('');
   const [messages, setMessages] = useState([]);
+  const [fileInput, setFileInput] = useState(null);
 
   useEffect(() => {
-    // 1. Tải danh bạ và nhóm từ Backend
     loadContacts();
 
-    // 2. Lắng nghe sự kiện tin nhắn mới thời gian thực từ Zalo
     socket.on('zalo-message-received', (payload) => {
-      console.log('Nội dung tin nhắn Zalo mới:', payload);
-      
-      // Push tin nhắn mới vào state hiển thị UI
       setMessages(prev => [...prev, payload.data]);
     });
 
@@ -142,50 +132,59 @@ export default function ZaloChatApp() {
   const loadContacts = async () => {
     try {
       const friendsRes = await axios.get('http://localhost:5000/api/zalo/friends');
-      if (friendsRes.data.success) {
-        setFriends(friendsRes.data.friends || []);
-      }
+      if (friendsRes.data.success) setFriends(friendsRes.data.friends || []);
 
       const groupsRes = await axios.get('http://localhost:5000/api/zalo/groups');
-      if (groupsRes.data.success) {
-        setGroups(groupsRes.data.groups || []);
-      }
+      if (groupsRes.data.success) setGroups(groupsRes.data.groups || []);
     } catch (err) {
       console.error('Lỗi khi tải danh bạ:', err);
     }
   };
 
-  const handleSendMessage = async () => {
-    if (!selectedThreadId || !messageText) return;
-
+  const handleSelectThread = async (id, isGroup = false) => {
+    setSelectedThreadId(id);
     try {
-      const res = await axios.post('http://localhost:5000/api/zalo/send-message', {
-        threadId: selectedThreadId,
-        message: messageText
-      });
-
-      if (res.data.success) {
-        // Thêm tin nhắn vừa gửi vào giao diện
-        setMessages(prev => [...prev, {
-          msgId: Date.now(),
-          uidFrom: 'me',
-          content: messageText
-        }]);
-        setMessageText('');
+      if (isGroup) {
+        const res = await axios.get(`http://localhost:5000/api/zalo/messages/group/${id}?count=50`);
+        setMessages(res.data.messages || []);
+      } else {
+        const res = await axios.get(`http://localhost:5000/api/zalo/messages/user/${id}?limit=50`);
+        setMessages(res.data.messages || []);
       }
     } catch (err) {
-      alert('Gửi tin nhắn thất bại: ' + (err.response?.data?.error || err.message));
+      console.error('Lỗi khi tải lịch sử tin nhắn:', err);
+    }
+  };
+
+  const handleSendFileOrImage = async (e) => {
+    const file = e.target.files[0];
+    if (!file || !selectedThreadId) return;
+
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('threadId', selectedThreadId);
+
+    const isImage = file.type.startsWith('image/');
+    const endpoint = isImage ? '/api/zalo/send-image' : '/api/zalo/send-file';
+
+    try {
+      await axios.post(`http://localhost:5000${endpoint}`, formData, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      });
+      alert('Đã gửi file/ảnh thành công!');
+    } catch (err) {
+      alert('Gửi file thất bại: ' + (err.response?.data?.error || err.message));
     }
   };
 
   return (
     <div style={{ display: 'flex', gap: 20, padding: 20 }}>
-      {/* Cột danh sách Bạn bè / Nhóm */}
+      {/* Sidebar danh sách */}
       <div style={{ width: 250, borderRight: '1px solid #ccc' }}>
         <h4>Bạn Bè</h4>
         <ul>
           {friends.map(f => (
-            <li key={f.userId} onClick={() => setSelectedThreadId(f.userId)} style={{ cursor: 'pointer' }}>
+            <li key={f.userId} onClick={() => handleSelectThread(f.userId, false)} style={{ cursor: 'pointer' }}>
               {f.displayName || f.userId}
             </li>
           ))}
@@ -194,33 +193,30 @@ export default function ZaloChatApp() {
         <h4>Nhóm</h4>
         <ul>
           {groups.map(g => (
-            <li key={g.groupId} onClick={() => setSelectedThreadId(g.groupId)} style={{ cursor: 'pointer' }}>
+            <li key={g.groupId} onClick={() => handleSelectThread(g.groupId, true)} style={{ cursor: 'pointer' }}>
               {g.name || g.groupId}
             </li>
           ))}
         </ul>
       </div>
 
-      {/* Cột nội dung khung Chat */}
+      {/* Frame Chat */}
       <div style={{ flex: 1 }}>
         <h4>Đang chat với: {selectedThreadId || 'Chưa chọn'}</h4>
-        <div style={{ height: 300, overflowY: 'auto', border: '1px solid #ddd', padding: 10 }}>
+        <div style={{ height: 350, overflowY: 'auto', border: '1px solid #ddd', padding: 10 }}>
           {messages.map((m, idx) => (
-            <div key={idx} style={{ textAlign: m.uidFrom === 'me' ? 'right' : 'left' }}>
-              <p><strong>{m.uidFrom}:</strong> {m.content || m.msg || JSON.stringify(m)}</p>
+            <div key={idx} style={{ textAlign: m.sender_id === 'me' || m.uidFrom === 'me' ? 'right' : 'left' }}>
+              <p><strong>{m.sender_name || m.uidFrom}:</strong> {m.content || m.msg || JSON.stringify(m)}</p>
             </div>
           ))}
         </div>
 
         <div style={{ marginTop: 10, display: 'flex', gap: 10 }}>
           <input
-            type="text"
-            value={messageText}
-            onChange={e => setMessageText(e.target.value)}
-            placeholder="Nhập nội dung tin nhắn..."
-            style={{ flex: 1, padding: 8 }}
+            type="file"
+            onChange={handleSendFileOrImage}
+            style={{ width: 200 }}
           />
-          <button onClick={handleSendMessage} style={{ padding: '8px 16px' }}>Gửi</button>
         </div>
       </div>
     </div>

@@ -1,7 +1,9 @@
 import { API, LoginQRCallbackEventType, Zalo } from 'zca-js';
 import { ZaloSessionStore, ZaloSessionData } from './ZaloSessionStore';
+import { ZaloMessageStore } from './ZaloMessageStore';
 import { broadcastQRUpdate, broadcastStatusChange, broadcastNewMessage } from '../sockets/zaloSocket';
 import fs from 'fs';
+import path from 'path';
 import { imageSize } from 'image-size';
 
 export class ZaloClientManager {
@@ -197,6 +199,26 @@ export class ZaloClientManager {
       api.listener.on('message', (message: any) => {
         console.log('[ZaloListener] New Message:', message);
         broadcastNewMessage({ type: 'zalo_message', data: message });
+
+        // Save incoming message to Supabase
+        try {
+          const threadId = message.threadId || message.toId || message.uidFrom;
+          const senderId = message.uidFrom || message.senderId;
+          if (threadId && senderId) {
+            ZaloMessageStore.saveMessage({
+              msg_id: message.msgId ? String(message.msgId) : undefined,
+              thread_id: String(threadId),
+              sender_id: String(senderId),
+              sender_name: message.dName || message.displayName || '',
+              thread_type: message.isGroup ? 'group' : 'user',
+              msg_type: message.msgType || 'text',
+              content: typeof message.data?.content === 'string' ? message.data.content : (message.content || ''),
+              attachments: message.data?.attachments || null,
+            });
+          }
+        } catch (e: any) {
+          console.error('[ZaloListener] Error saving incoming message:', e.message);
+        }
       });
 
       api.listener.on('group_event', (eventData: any) => {
@@ -212,7 +234,7 @@ export class ZaloClientManager {
   }
 
   /**
-   * Send a message to a thread (friend or group)
+   * Send a text message to a thread (friend or group)
    */
   public async sendMessage(threadId: string, message: string | { msg: string; attachments?: any[] }, threadType?: number) {
     if (!this.api) {
@@ -221,7 +243,127 @@ export class ZaloClientManager {
 
     const payload = typeof message === 'string' ? { msg: message } : message;
     const result = await this.api.sendMessage(payload, threadId, threadType);
+
+    // Save outgoing message to Supabase
+    try {
+      const msgContent = typeof message === 'string' ? message : message.msg;
+      ZaloMessageStore.saveMessage({
+        thread_id: threadId,
+        sender_id: this.zaloId || 'me',
+        sender_name: this.userProfile?.displayName || 'Me',
+        thread_type: threadType === 1 ? 'group' : 'user',
+        msg_type: 'text',
+        content: msgContent,
+      });
+    } catch (e: any) {
+      console.error('[ZaloClientManager] Error saving sent message:', e.message);
+    }
+
     return result;
+  }
+
+  /**
+   * Send an image file to a thread (friend or group)
+   */
+  public async sendImage(threadId: string, filePath: string, threadType?: number, caption?: string) {
+    if (!this.api) {
+      throw new Error('Chưa đăng nhập Zalo.');
+    }
+
+    if (!fs.existsSync(filePath)) {
+      throw new Error(`File không tồn tại: ${filePath}`);
+    }
+
+    const buffer = fs.readFileSync(filePath);
+    const baseName = path.basename(filePath);
+    let width = 0;
+    let height = 0;
+
+    try {
+      const dim = imageSize(buffer);
+      width = dim.width ?? 0;
+      height = dim.height ?? 0;
+    } catch {}
+
+    const attachment: any = {
+      data: buffer,
+      filename: baseName,
+      metadata: { totalSize: buffer.length, width, height },
+    };
+
+    const payload = {
+      msg: caption || '',
+      attachments: [attachment],
+    };
+
+    const result = await this.api.sendMessage(payload, threadId, threadType);
+
+    // Save outgoing image message
+    try {
+      ZaloMessageStore.saveMessage({
+        thread_id: threadId,
+        sender_id: this.zaloId || 'me',
+        sender_name: this.userProfile?.displayName || 'Me',
+        thread_type: threadType === 1 ? 'group' : 'user',
+        msg_type: 'image',
+        content: caption || `[Hình ảnh] ${baseName}`,
+        attachments: [{ filename: baseName, size: buffer.length }],
+      });
+    } catch (e: any) {
+      console.error('[ZaloClientManager] Error saving sent image message:', e.message);
+    }
+
+    return result;
+  }
+
+  /**
+   * Send a general file to a thread (friend or group)
+   */
+  public async sendFile(threadId: string, filePath: string, threadType?: number) {
+    if (!this.api) {
+      throw new Error('Chưa đăng nhập Zalo.');
+    }
+
+    if (!fs.existsSync(filePath)) {
+      throw new Error(`File không tồn tại: ${filePath}`);
+    }
+
+    const baseName = path.basename(filePath);
+    const payload = {
+      msg: '',
+      attachments: [filePath],
+    };
+
+    const result = await this.api.sendMessage(payload, threadId, threadType);
+
+    // Save outgoing file message
+    try {
+      ZaloMessageStore.saveMessage({
+        thread_id: threadId,
+        sender_id: this.zaloId || 'me',
+        sender_name: this.userProfile?.displayName || 'Me',
+        thread_type: threadType === 1 ? 'group' : 'user',
+        msg_type: 'file',
+        content: `[File] ${baseName}`,
+        attachments: [{ filename: baseName }],
+      });
+    } catch (e: any) {
+      console.error('[ZaloClientManager] Error saving sent file message:', e.message);
+    }
+
+    return result;
+  }
+
+  /**
+   * Get group chat history (up to count messages, default 50)
+   */
+  public async getGroupChatHistory(groupId: string, count: number = 50) {
+    if (!this.api) {
+      throw new Error('Chưa đăng nhập Zalo.');
+    }
+
+    const history = await this.api.getGroupChatHistory(groupId, count);
+    return history;
   }
 
   /**
