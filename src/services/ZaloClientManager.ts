@@ -1,5 +1,4 @@
-import { API, Zalo } from 'zca-js';
-import { LoginQRCallbackEventType } from 'zca-js/dist/apis/loginQR.js';
+import { API, LoginQRCallbackEventType, Zalo } from 'zca-js';
 import { ZaloSessionStore, ZaloSessionData } from './ZaloSessionStore';
 import { broadcastQRUpdate, broadcastStatusChange, broadcastNewMessage } from '../sockets/zaloSocket';
 import fs from 'fs';
