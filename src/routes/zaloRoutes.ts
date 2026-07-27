@@ -8,13 +8,22 @@ import { ZaloMessageStore } from '../services/ZaloMessageStore';
 const router = Router();
 const clientManager = ZaloClientManager.getInstance();
 
-// Cấu hình Multer lưu file tạm vào folder 'uploads/'
+// Cấu hình Multer giữ nguyên extension đuôi file gốc
 const uploadDir = path.join(process.cwd(), 'uploads');
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });
 }
 
-const upload = multer({ dest: uploadDir });
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, uploadDir),
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname);
+    const name = path.basename(file.originalname, ext);
+    cb(null, `${name}-${Date.now()}${ext}`);
+  }
+});
+
+const upload = multer({ storage });
 
 /**
  * GET /api/zalo/qr
@@ -160,7 +169,7 @@ router.post('/send-image', upload.single('file'), async (req: Request, res: Resp
 
     tempFilePath = file.path;
     const typeNum = parseThreadType(threadType);
-    const result = await clientManager.sendImage(threadId, tempFilePath, typeNum, caption);
+    const result = await clientManager.sendImage(threadId, tempFilePath, typeNum, caption, file.originalname);
 
     return res.json({
       success: true,

@@ -24,7 +24,7 @@ export class ZaloClientManager {
 
   private createZaloConfig() {
     return {
-      selfListen: true,
+      selfListen: false,
       checkUpdate: false,
       logging: false,
       imageMetadataGetter: async (filePath: string) => {
@@ -265,7 +265,7 @@ export class ZaloClientManager {
   /**
    * Send an image file to a thread (friend or group)
    */
-  public async sendImage(threadId: string, filePath: string, threadType?: number, caption?: string) {
+  public async sendImage(threadId: string, filePath: string, threadType?: number, caption?: string, originalName?: string) {
     if (!this.api) {
       throw new Error('Chưa đăng nhập Zalo.');
     }
@@ -275,7 +275,8 @@ export class ZaloClientManager {
     }
 
     const buffer = fs.readFileSync(filePath);
-    const baseName = path.basename(filePath);
+    // Ưu tiên dùng tên gốc (có đuôi .png/.jpg) thay vì tên file tạm của multer
+    const baseName = originalName || path.basename(filePath);
     let width = 0;
     let height = 0;
 
