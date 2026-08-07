@@ -6,7 +6,14 @@ import { ZaloClientManager } from '../services/ZaloClientManager';
 import { ZaloMessageStore } from '../services/ZaloMessageStore';
 
 const router = Router();
-const clientManager = ZaloClientManager.getInstance();
+
+// Helper to extract appId from request headers or query params
+const getAppId = (req: Request): string => {
+  const headerAppId = req.headers['x-app-id'] as string;
+  const queryAppId = req.query.appId as string;
+  const bodyAppId = req.body?.appId as string;
+  return (headerAppId || queryAppId || bodyAppId || 'default').trim();
+};
 
 // Cấu hình Multer giữ nguyên extension đuôi file gốc
 const uploadDir = path.join(process.cwd(), 'uploads');
@@ -31,6 +38,8 @@ const upload = multer({ storage });
  */
 router.get('/qr', async (req: Request, res: Response) => {
   try {
+    const appId = getAppId(req);
+    const clientManager = ZaloClientManager.getInstance(appId);
     const status = clientManager.getStatus();
     if (status.isLoggedIn) {
       return res.json({
@@ -60,6 +69,8 @@ router.get('/qr', async (req: Request, res: Response) => {
  */
 router.get('/status', (req: Request, res: Response) => {
   try {
+    const appId = getAppId(req);
+    const clientManager = ZaloClientManager.getInstance(appId);
     const status = clientManager.getStatus();
     return res.json({
       success: true,
@@ -81,6 +92,8 @@ router.get('/status', (req: Request, res: Response) => {
  */
 router.get('/friends', async (req: Request, res: Response) => {
   try {
+    const appId = getAppId(req);
+    const clientManager = ZaloClientManager.getInstance(appId);
     const friends = await clientManager.getFriends();
     return res.json({
       success: true,
@@ -100,6 +113,8 @@ router.get('/friends', async (req: Request, res: Response) => {
  */
 router.get('/search-phone', async (req: Request, res: Response) => {
   try {
+    const appId = getAppId(req);
+    const clientManager = ZaloClientManager.getInstance(appId);
     const phone = req.query.phone as string;
     if (!phone) {
       return res.status(400).json({
@@ -137,6 +152,8 @@ router.get('/search-phone', async (req: Request, res: Response) => {
  */
 router.get('/groups', async (req: Request, res: Response) => {
   try {
+    const appId = getAppId(req);
+    const clientManager = ZaloClientManager.getInstance(appId);
     const groups = await clientManager.getGroups();
     return res.json({
       success: true,
@@ -164,6 +181,8 @@ function parseThreadType(threadType: any): number | undefined {
  */
 router.post('/send-message', async (req: Request, res: Response) => {
   try {
+    const appId = getAppId(req);
+    const clientManager = ZaloClientManager.getInstance(appId);
     const { threadId, message, threadType } = req.body;
 
     if (!threadId || !message) {
@@ -194,6 +213,8 @@ router.post('/send-message', async (req: Request, res: Response) => {
 router.post('/send-image', upload.single('file'), async (req: Request, res: Response) => {
   let tempFilePath = '';
   try {
+    const appId = getAppId(req);
+    const clientManager = ZaloClientManager.getInstance(appId);
     const file = req.file;
     const { threadId, threadType, caption } = req.body;
 
@@ -233,6 +254,8 @@ router.post('/send-image', upload.single('file'), async (req: Request, res: Resp
 router.post('/send-file', upload.single('file'), async (req: Request, res: Response) => {
   let tempFilePath = '';
   try {
+    const appId = getAppId(req);
+    const clientManager = ZaloClientManager.getInstance(appId);
     const file = req.file;
     const { threadId, threadType } = req.body;
 
@@ -271,6 +294,8 @@ router.post('/send-file', upload.single('file'), async (req: Request, res: Respo
  */
 router.get('/messages/group/:groupId', async (req: Request, res: Response) => {
   try {
+    const appId = getAppId(req);
+    const clientManager = ZaloClientManager.getInstance(appId);
     const { groupId } = req.params;
     const count = req.query.count ? Number(req.query.count) : 50;
 
@@ -294,10 +319,11 @@ router.get('/messages/group/:groupId', async (req: Request, res: Response) => {
  */
 router.get('/messages/user/:friendId', async (req: Request, res: Response) => {
   try {
+    const appId = getAppId(req);
     const { friendId } = req.params;
     const limit = req.query.limit ? Number(req.query.limit) : 50;
 
-    const messages = await ZaloMessageStore.getMessagesByThread(friendId, limit);
+    const messages = await ZaloMessageStore.getMessagesByThread(friendId, limit, appId);
     return res.json({
       success: true,
       messages,
@@ -316,8 +342,9 @@ router.get('/messages/user/:friendId', async (req: Request, res: Response) => {
  */
 router.get('/conversations', async (req: Request, res: Response) => {
   try {
+    const appId = getAppId(req);
     const limit = req.query.limit ? Number(req.query.limit) : 20;
-    const conversations = await ZaloMessageStore.getRecentConversations(limit);
+    const conversations = await ZaloMessageStore.getRecentConversations(limit, appId);
 
     return res.json({
       success: true,
@@ -337,6 +364,8 @@ router.get('/conversations', async (req: Request, res: Response) => {
  */
 router.post('/logout', async (req: Request, res: Response) => {
   try {
+    const appId = getAppId(req);
+    const clientManager = ZaloClientManager.getInstance(appId);
     await clientManager.logout();
     return res.json({
       success: true,

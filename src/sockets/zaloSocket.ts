@@ -12,7 +12,9 @@ export function initSocketServer(httpServer: HttpServer): SocketIOServer {
   });
 
   io.on('connection', (socket: Socket) => {
-    console.log(`[Socket.IO] Client connected: ${socket.id}`);
+    const appId = (socket.handshake.query.appId as string) || 'default';
+    socket.join(`app_${appId}`);
+    console.log(`[Socket.IO] Client connected: ${socket.id} -> Room: app_${appId}`);
 
     socket.on('disconnect', () => {
       console.log(`[Socket.IO] Client disconnected: ${socket.id}`);
@@ -27,20 +29,20 @@ export function getSocketIO(): SocketIOServer | null {
   return io;
 }
 
-export function broadcastQRUpdate(qrDataUrl: string, status: 'waiting' | 'scanned' | 'success' | 'expired' | 'declined' | 'error') {
+export function broadcastQRUpdate(appId: string, qrDataUrl: string, status: 'waiting' | 'scanned' | 'success' | 'expired' | 'declined' | 'error') {
   if (io) {
-    io.emit('zalo-qr-update', { qr: qrDataUrl, status });
+    io.to(`app_${appId}`).emit('zalo-qr-update', { qr: qrDataUrl, status });
   }
 }
 
-export function broadcastStatusChange(isLoggedIn: boolean, user?: any) {
+export function broadcastStatusChange(appId: string, isLoggedIn: boolean, user?: any) {
   if (io) {
-    io.emit('zalo-status-change', { isLoggedIn, user });
+    io.to(`app_${appId}`).emit('zalo-status-change', { isLoggedIn, user });
   }
 }
 
-export function broadcastNewMessage(messageData: any) {
+export function broadcastNewMessage(appId: string, messageData: any) {
   if (io) {
-    io.emit('zalo-message-received', messageData);
+    io.to(`app_${appId}`).emit('zalo-message-received', messageData);
   }
 }

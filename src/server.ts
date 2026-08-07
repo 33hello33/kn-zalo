@@ -34,14 +34,14 @@ initSocketServer(httpServer);
 // Start Server
 httpServer.listen(PORT, async () => {
   console.log(`===================================================`);
-  console.log(`🚀 Zalo Node.js Service running on port ${PORT}`);
-  console.log(`📡 WebSocket ready for React Frontend connections`);
+  console.log(`🚀 Multi-Tenant Zalo Service running on port ${PORT}`);
+  console.log(`📡 WebSocket ready with per-app room isolation`);
   console.log(`===================================================`);
 
-  // Auto restore session from Supabase on startup
+  // Auto restore sessions for default instance on boot
   try {
-    await ZaloClientManager.getInstance().autoRestoreSession();
+    await ZaloClientManager.getInstance('default').autoRestoreSession();
   } catch (err: any) {
-    console.error('[Server Boot] Auto-restore session error:', err.message);
+    console.error('[Server Boot] Auto-restore default session error:', err.message);
   }
 });

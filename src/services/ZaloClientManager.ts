@@ -7,19 +7,26 @@ import path from 'path';
 import { imageSize } from 'image-size';
 
 export class ZaloClientManager {
-  private static instance: ZaloClientManager;
+  private static instances: Map<string, ZaloClientManager> = new Map();
+  private appId: string;
   private api: API | null = null;
   private zaloId: string | null = null;
   private userProfile: { zaloId?: string; displayName?: string; avatar?: string } | null = null;
   private latestQRData: { qr: string; status: string } = { qr: '', status: 'idle' };
 
-  private constructor() {}
+  private constructor(appId: string) {
+    this.appId = appId;
+  }
 
-  public static getInstance(): ZaloClientManager {
-    if (!ZaloClientManager.instance) {
-      ZaloClientManager.instance = new ZaloClientManager();
+  public static getInstance(appId = 'default'): ZaloClientManager {
+    if (!ZaloClientManager.instances.has(appId)) {
+      ZaloClientManager.instances.set(appId, new ZaloClientManager(appId));
     }
-    return ZaloClientManager.instance;
+    return ZaloClientManager.instances.get(appId)!;
+  }
+
+  public static getAllInstances(): Map<string, ZaloClientManager> {
+    return ZaloClientManager.instances;
   }
 
   private createZaloConfig() {
@@ -45,7 +52,7 @@ export class ZaloClientManager {
   }
 
   /**
-   * Start QR Login Process
+   * Start QR Login Process for this appId
    */
   public async generateQRLogin(): Promise<{ qr: string; status: string }> {
     if (this.api && this.zaloId) {
@@ -57,7 +64,7 @@ export class ZaloClientManager {
 
     try {
       this.latestQRData = { qr: '', status: 'waiting' };
-      broadcastQRUpdate('', 'waiting');
+      broadcastQRUpdate(this.appId, '', 'waiting');
 
       const api = await zalo.loginQR(
         {
@@ -65,7 +72,7 @@ export class ZaloClientManager {
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36',
         },
         (res: any) => {
-          console.log(`[ZaloClientManager] QR Event: ${res.type}`);
+          console.log(`[ZaloClientManager][${this.appId}] QR Event: ${res.type}`);
 
           if (res.type === LoginQRCallbackEventType.QRCodeGenerated) {
             const raw: string = res.data?.image || res.data?.qrData || '';
@@ -76,24 +83,24 @@ export class ZaloClientManager {
               : '';
 
             this.latestQRData = { qr: qrDataUrl, status: 'waiting' };
-            broadcastQRUpdate(qrDataUrl, 'waiting');
+            broadcastQRUpdate(this.appId, qrDataUrl, 'waiting');
           }
 
           if (res.type === LoginQRCallbackEventType.QRCodeExpired) {
             this.latestQRData = { qr: '', status: 'expired' };
-            broadcastQRUpdate('', 'expired');
+            broadcastQRUpdate(this.appId, '', 'expired');
           }
 
           if (res.type === LoginQRCallbackEventType.QRCodeDeclined) {
             this.latestQRData = { qr: '', status: 'declined' };
-            broadcastQRUpdate('', 'declined');
+            broadcastQRUpdate(this.appId, '', 'declined');
           }
 
           if (res.type === LoginQRCallbackEventType.QRCodeScanned) {
             accountInfo.avatar = res.data?.avatar || '';
             accountInfo.displayName = res.data?.display_name || '';
             this.latestQRData = { qr: '', status: 'scanned' };
-            broadcastQRUpdate('', 'scanned');
+            broadcastQRUpdate(this.appId, '', 'scanned');
           }
         }
       );
@@ -103,7 +110,7 @@ export class ZaloClientManager {
 
       if (!zaloId || !context) {
         this.latestQRData = { qr: '', status: 'error' };
-        broadcastQRUpdate('', 'error');
+        broadcastQRUpdate(this.appId, '', 'error');
         throw new Error('Đăng nhập QR thất bại');
       }
 
@@ -117,6 +124,7 @@ export class ZaloClientManager {
 
       const cookiesJson = JSON.stringify(context.cookie.serializeSync());
       const sessionData: ZaloSessionData = {
+        app_id: this.appId,
         zalo_id: zaloId,
         full_name: accountInfo.displayName,
         avatar_url: accountInfo.avatar,
@@ -126,32 +134,32 @@ export class ZaloClientManager {
         is_active: true,
       };
 
-      await ZaloSessionStore.saveSession(sessionData);
+      await ZaloSessionStore.saveSession(sessionData, this.appId);
 
       this.latestQRData = { qr: '', status: 'success' };
-      broadcastQRUpdate('', 'success');
-      broadcastStatusChange(true, this.userProfile);
+      broadcastQRUpdate(this.appId, '', 'success');
+      broadcastStatusChange(this.appId, true, this.userProfile);
 
       this.startMessageListener(api);
 
       return { qr: '', status: 'success' };
     } catch (error: any) {
-      console.error('[ZaloClientManager] Error in QR Login:', error.message);
+      console.error(`[ZaloClientManager][${this.appId}] Error in QR Login:`, error.message);
       this.latestQRData = { qr: '', status: 'error' };
-      broadcastQRUpdate('', 'error');
+      broadcastQRUpdate(this.appId, '', 'error');
       return { qr: '', status: 'error' };
     }
   }
 
   /**
-   * Auto restore session from Supabase on server startup
+   * Auto restore session from Supabase on server startup for this appId
    */
   public async autoRestoreSession(): Promise<boolean> {
-    console.log('[ZaloClientManager] Attempting to auto-restore Zalo session from Supabase...');
-    const session = await ZaloSessionStore.getActiveSession();
+    console.log(`[ZaloClientManager][${this.appId}] Attempting to auto-restore Zalo session...`);
+    const session = await ZaloSessionStore.getActiveSession(this.appId);
 
     if (!session) {
-      console.log('[ZaloClientManager] No active session found in Supabase.');
+      console.log(`[ZaloClientManager][${this.appId}] No active session found.`);
       return false;
     }
 
@@ -167,8 +175,8 @@ export class ZaloClientManager {
 
       const zaloId = api.getOwnId();
       if (!zaloId) {
-        console.warn('[ZaloClientManager] Session restore returned invalid Zalo ID. Expiring session...');
-        await ZaloSessionStore.deactivateSession(session.zalo_id);
+        console.warn(`[ZaloClientManager][${this.appId}] Session restore returned invalid Zalo ID. Expiring session...`);
+        await ZaloSessionStore.deactivateSession(session.zalo_id, this.appId);
         return false;
       }
 
@@ -180,13 +188,13 @@ export class ZaloClientManager {
         avatar: session.avatar_url,
       };
 
-      console.log(`[ZaloClientManager] ✅ Auto-restored Zalo session successfully for Zalo ID: ${zaloId}`);
-      broadcastStatusChange(true, this.userProfile);
+      console.log(`[ZaloClientManager][${this.appId}] ✅ Auto-restored Zalo session successfully for Zalo ID: ${zaloId}`);
+      broadcastStatusChange(this.appId, true, this.userProfile);
 
       this.startMessageListener(api);
       return true;
     } catch (err: any) {
-      console.error('[ZaloClientManager] Failed to auto-restore session:', err.message);
+      console.error(`[ZaloClientManager][${this.appId}] Failed to auto-restore session:`, err.message);
       return false;
     }
   }
@@ -197,15 +205,15 @@ export class ZaloClientManager {
   private startMessageListener(api: API) {
     try {
       api.listener.on('message', (message: any) => {
-        console.log('[ZaloListener] New Message:', message);
-        broadcastNewMessage({ type: 'zalo_message', data: message });
+        console.log(`[ZaloListener][${this.appId}] New Message:`, message);
+        broadcastNewMessage(this.appId, { type: 'zalo_message', data: message });
 
-        // Save incoming message to Supabase
         try {
           const threadId = message.threadId || message.toId || message.uidFrom;
           const senderId = message.uidFrom || message.senderId;
           if (threadId && senderId) {
             ZaloMessageStore.saveMessage({
+              app_id: this.appId,
               msg_id: message.msgId ? String(message.msgId) : undefined,
               thread_id: String(threadId),
               sender_id: String(senderId),
@@ -214,22 +222,22 @@ export class ZaloClientManager {
               msg_type: message.msgType || 'text',
               content: typeof message.data?.content === 'string' ? message.data.content : (message.content || ''),
               attachments: message.data?.attachments || null,
-            });
+            }, this.appId);
           }
         } catch (e: any) {
-          console.error('[ZaloListener] Error saving incoming message:', e.message);
+          console.error(`[ZaloListener][${this.appId}] Error saving incoming message:`, e.message);
         }
       });
 
       api.listener.on('group_event', (eventData: any) => {
-        console.log('[ZaloListener] Group Event:', eventData);
-        broadcastNewMessage({ type: 'group_event', data: eventData });
+        console.log(`[ZaloListener][${this.appId}] Group Event:`, eventData);
+        broadcastNewMessage(this.appId, { type: 'group_event', data: eventData });
       });
 
       api.listener.start();
-      console.log('[ZaloListener] Started real-time message listener.');
+      console.log(`[ZaloListener][${this.appId}] Started real-time message listener.`);
     } catch (err: any) {
-      console.error('[ZaloListener] Error starting listener:', err.message);
+      console.error(`[ZaloListener][${this.appId}] Error starting listener:`, err.message);
     }
   }
 
@@ -244,19 +252,19 @@ export class ZaloClientManager {
     const payload = typeof message === 'string' ? { msg: message } : message;
     const result = await this.api.sendMessage(payload, threadId, threadType);
 
-    // Save outgoing message to Supabase
     try {
       const msgContent = typeof message === 'string' ? message : message.msg;
       ZaloMessageStore.saveMessage({
+        app_id: this.appId,
         thread_id: threadId,
         sender_id: this.zaloId || 'me',
         sender_name: this.userProfile?.displayName || 'Me',
         thread_type: threadType === 1 ? 'group' : 'user',
         msg_type: 'text',
         content: msgContent,
-      });
+      }, this.appId);
     } catch (e: any) {
-      console.error('[ZaloClientManager] Error saving sent message:', e.message);
+      console.error(`[ZaloClientManager][${this.appId}] Error saving sent message:`, e.message);
     }
 
     return result;
@@ -275,7 +283,6 @@ export class ZaloClientManager {
     }
 
     const buffer = fs.readFileSync(filePath);
-    // Ưu tiên dùng tên gốc (có đuôi .png/.jpg) thay vì tên file tạm của multer
     const baseName = originalName || path.basename(filePath);
     let width = 0;
     let height = 0;
@@ -299,9 +306,9 @@ export class ZaloClientManager {
 
     const result = await this.api.sendMessage(payload, threadId, threadType);
 
-    // Save outgoing image message
     try {
       ZaloMessageStore.saveMessage({
+        app_id: this.appId,
         thread_id: threadId,
         sender_id: this.zaloId || 'me',
         sender_name: this.userProfile?.displayName || 'Me',
@@ -309,9 +316,9 @@ export class ZaloClientManager {
         msg_type: 'image',
         content: caption || `[Hình ảnh] ${baseName}`,
         attachments: [{ filename: baseName, size: buffer.length }],
-      });
+      }, this.appId);
     } catch (e: any) {
-      console.error('[ZaloClientManager] Error saving sent image message:', e.message);
+      console.error(`[ZaloClientManager][${this.appId}] Error saving sent image message:`, e.message);
     }
 
     return result;
@@ -337,9 +344,9 @@ export class ZaloClientManager {
 
     const result = await this.api.sendMessage(payload, threadId, threadType);
 
-    // Save outgoing file message
     try {
       ZaloMessageStore.saveMessage({
+        app_id: this.appId,
         thread_id: threadId,
         sender_id: this.zaloId || 'me',
         sender_name: this.userProfile?.displayName || 'Me',
@@ -347,9 +354,9 @@ export class ZaloClientManager {
         msg_type: 'file',
         content: `[File] ${baseName}`,
         attachments: [{ filename: baseName }],
-      });
+      }, this.appId);
     } catch (e: any) {
-      console.error('[ZaloClientManager] Error saving sent file message:', e.message);
+      console.error(`[ZaloClientManager][${this.appId}] Error saving sent file message:`, e.message);
     }
 
     return result;
@@ -408,7 +415,6 @@ export class ZaloClientManager {
       throw new Error('Chưa đăng nhập Zalo.');
     }
 
-    // 1. Call Zalo API findUser
     const foundUser: any = await (this.api as any).findUser(phone);
     if (!foundUser) {
       return null;
@@ -419,7 +425,6 @@ export class ZaloClientManager {
     let avatarUrl = foundUser.avatar || foundUser.avatarUrl || foundUser.avatar_url || '';
     let alias = foundUser.alias || '';
 
-    // 2. Check in friend list to get alias (tên gợi nhớ) if available
     try {
       const friends: any[] = await this.api.getAllFriends();
       const friend = friends.find((f: any) => (f.userId || f.uid || f.id || f.user_id || f.contact_id) === userId);
@@ -437,7 +442,7 @@ export class ZaloClientManager {
       phone,
       displayName,
       alias,
-      resolvedName, // Tên gợi nhớ nếu có, ưu tiên trên tên Zalo
+      resolvedName,
       avatarUrl,
       raw: foundUser,
     };
@@ -448,14 +453,14 @@ export class ZaloClientManager {
    */
   public async logout() {
     if (this.zaloId) {
-      await ZaloSessionStore.deactivateSession(this.zaloId);
+      await ZaloSessionStore.deactivateSession(this.zaloId, this.appId);
     }
     this.api = null;
     this.zaloId = null;
     this.userProfile = null;
     this.latestQRData = { qr: '', status: 'idle' };
 
-    broadcastStatusChange(false);
+    broadcastStatusChange(this.appId, false);
     return true;
   }
 }
