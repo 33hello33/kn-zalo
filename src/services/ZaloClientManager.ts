@@ -541,6 +541,16 @@ export class ZaloClientManager {
   }
 
   /**
+   * Get detail of sticker(s) by ID
+   */
+  public async getStickersDetail(stickerId: number) {
+    if (!this.api) {
+      throw new Error('Chưa đăng nhập Zalo.');
+    }
+    return await this.api.getStickersDetail(stickerId);
+  }
+
+  /**
    * Send a sticker
    */
   public async sendSticker(threadId: string, stickerId: number, threadType?: number) {

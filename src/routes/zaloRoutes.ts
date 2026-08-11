@@ -406,6 +406,24 @@ router.post('/set-alias', async (req: Request, res: Response) => {
 });
 
 /**
+ * GET /api/zalo/sticker-url/:stickerId
+ * Lấy link ảnh sticker trực tiếp từ Zalo Server API (getStickersDetail)
+ */
+router.get('/sticker-url/:stickerId', async (req: Request, res: Response) => {
+  try {
+    const appId = getAppId(req);
+    const clientManager = ZaloClientManager.getInstance(appId);
+    const { stickerId } = req.params;
+    const detail: any = await clientManager.getStickersDetail(Number(stickerId));
+    const stk = Array.isArray(detail) ? detail[0] : (detail?.stickers?.[0] || detail);
+    const imgUrl = stk?.spriteUrl || stk?.normalUrl || stk?.staticUrl || stk?.url || '';
+    return res.json({ success: true, url: imgUrl, detail: stk });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
  * POST /api/zalo/send-sticker
  * Gửi sticker Zalo
  */
