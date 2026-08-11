@@ -377,12 +377,39 @@ export class ZaloClientManager {
   /**
    * Get list of friends
    */
+  /**
+   * Get list of friends merged with their real Aliases (Biệt danh/Tên gợi nhớ)
+   */
   public async getFriends() {
     if (!this.api) {
       throw new Error('Chưa đăng nhập Zalo.');
     }
-    const friends = await this.api.getAllFriends();
-    return friends;
+    const friends: any[] = await this.api.getAllFriends();
+    
+    // Tự động phân trang lấy toàn bộ Aliases từ Zalo API
+    try {
+      const aliasItems = await this.getAliases();
+      const aliasMap: Record<string, string> = {};
+      aliasItems.forEach((item: any) => {
+        const uId = item.userId || item.uid;
+        if (uId && item.alias) {
+          aliasMap[String(uId)] = item.alias;
+        }
+      });
+
+      return friends.map((f: any) => {
+        const userId = String(f.userId || f.uid || f.id || '');
+        const alias = aliasMap[userId] || f.alias || f.friendAlias || f.nickname || f.nickName || '';
+        return {
+          ...f,
+          alias,
+          friendAlias: alias,
+          displayNameResolved: alias || f.displayName || f.zaloName || f.name || userId
+        };
+      });
+    } catch {
+      return friends;
+    }
   }
 
   /**
@@ -449,14 +476,28 @@ export class ZaloClientManager {
   }
 
   /**
-   * Get list of all aliases (tên gợi nhớ)
+   * Get list of all aliases (tên gợi nhớ) with full pagination
    */
   public async getAliases() {
     if (!this.api) {
       throw new Error('Chưa đăng nhập Zalo.');
     }
-    const aliasRes: any = await (this.api as any).getAliasList({ count: 200, page: 1 });
-    return aliasRes?.items || aliasRes?.data?.items || aliasRes?.aliases || [];
+    let page = 1;
+    let allItems: any[] = [];
+    const MAX_PAGES = 50;
+
+    while (page <= MAX_PAGES) {
+      try {
+        const aliasRes: any = await (this.api as any).getAliasList({ count: 200, page });
+        const items = aliasRes?.items || aliasRes?.data?.items || aliasRes?.aliases || aliasRes?.response?.items || [];
+        if (!Array.isArray(items) || items.length === 0) break;
+        allItems = allItems.concat(items);
+        page++;
+      } catch {
+        break;
+      }
+    }
+    return allItems;
   }
 
   /**
