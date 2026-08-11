@@ -378,38 +378,65 @@ export class ZaloClientManager {
    * Get list of friends
    */
   /**
-   * Get list of friends merged with their real Aliases (Biệt danh/Tên gợi nhớ)
+   * Get list of friends merged with Aliases & Phonebook Contact Names (Biệt danh/Tên từ danh bạ điện thoại)
    */
   public async getFriends() {
     if (!this.api) {
       throw new Error('Chưa đăng nhập Zalo.');
     }
     const friends: any[] = await this.api.getAllFriends();
-    
-    // Tự động phân trang lấy toàn bộ Aliases từ Zalo API
+    if (!Array.isArray(friends) || friends.length === 0) return [];
+
+    // 1. Phân trang lấy tất cả Aliases từ Zalo Web API
+    const aliasMap: Record<string, string> = {};
     try {
       const aliasItems = await this.getAliases();
-      const aliasMap: Record<string, string> = {};
       aliasItems.forEach((item: any) => {
         const uId = item.userId || item.uid;
         if (uId && item.alias) {
           aliasMap[String(uId)] = item.alias;
         }
       });
+    } catch {}
 
-      return friends.map((f: any) => {
-        const userId = String(f.userId || f.uid || f.id || '');
-        const alias = aliasMap[userId] || f.alias || f.friendAlias || f.nickname || f.nickName || '';
-        return {
-          ...f,
-          alias,
-          friendAlias: alias,
-          displayNameResolved: alias || f.displayName || f.zaloName || f.name || userId
-        };
-      });
-    } catch {
-      return friends;
-    }
+    // 2. Batch fetch hồ sơ getUserInfo để lấy friendAlias/contactName trong danh bạ điện thoại
+    const profileAliasMap: Record<string, string> = {};
+    const BATCH_SIZE = 40;
+    try {
+      for (let i = 0; i < friends.length; i += BATCH_SIZE) {
+        const batch = friends.slice(i, i + BATCH_SIZE);
+        const userIds = batch.map((f: any) => String(f.userId || f.uid || f.id || '')).filter(Boolean);
+        if (userIds.length === 0) continue;
+
+        try {
+          const uRes: any = await (this.api as any).getUserInfo(userIds);
+          const profiles: Record<string, any> = uRes?.changed_profiles || uRes?.data || uRes?.profiles || {};
+          for (const uid of userIds) {
+            const prof = profiles[uid] || profiles[`${uid}_0`];
+            if (prof) {
+              const aliasName = prof.friendAlias || prof.alias || prof.contactName || prof.nickName || prof.globalAlias || '';
+              if (aliasName) {
+                profileAliasMap[uid] = aliasName;
+              }
+            }
+          }
+        } catch (batchErr) {
+          // Continue with next batch if any error occurs
+        }
+      }
+    } catch {}
+
+    // 3. Kết hợp thông tin ưu tiên theo đúng thứ tự: Tên Biệt Danh bạn đặt trong Zalo App (aliasMap) > Friend Alias > Zalo Name
+    return friends.map((f: any) => {
+      const userId = String(f.userId || f.uid || f.id || '');
+      const finalAlias = aliasMap[userId] || profileAliasMap[userId] || f.alias || f.friendAlias || f.nickname || f.nickName || '';
+      return {
+        ...f,
+        alias: finalAlias,
+        friendAlias: finalAlias,
+        displayNameResolved: finalAlias || f.displayName || f.zaloName || f.name || userId
+      };
+    });
   }
 
   /**
@@ -476,7 +503,7 @@ export class ZaloClientManager {
   }
 
   /**
-   * Get list of all aliases (tên gợi nhớ) with full pagination
+   * Get list of all aliases (tên gợi nhớ bạn đã đặt trong Zalo app) with full pagination
    */
   public async getAliases() {
     if (!this.api) {
@@ -488,12 +515,15 @@ export class ZaloClientManager {
 
     while (page <= MAX_PAGES) {
       try {
-        const aliasRes: any = await (this.api as any).getAliasList({ count: 200, page });
-        const items = aliasRes?.items || aliasRes?.data?.items || aliasRes?.aliases || aliasRes?.response?.items || [];
+        // zca-js API getAliasList signature: getAliasList(count: number, page: number)
+        const aliasRes: any = await this.api.getAliasList(200, page);
+        // zca-js trả về object có thuộc tính items hoặc data
+        const items = aliasRes?.items || aliasRes?.data?.items || aliasRes?.aliases || (Array.isArray(aliasRes) ? aliasRes : []);
         if (!Array.isArray(items) || items.length === 0) break;
         allItems = allItems.concat(items);
         page++;
-      } catch {
+      } catch (err: any) {
+        console.warn(`[getAliases] Error on page ${page}:`, err.message);
         break;
       }
     }
