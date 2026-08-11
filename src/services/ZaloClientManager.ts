@@ -244,13 +244,13 @@ export class ZaloClientManager {
   /**
    * Send a text message to a thread (friend or group)
    */
-  public async sendMessage(threadId: string, message: string | { msg: string; attachments?: any[] }, threadType?: number) {
+  public async sendMessage(threadId: string, message: string | { msg: string; attachments?: any[]; quote?: any }, threadType?: number) {
     if (!this.api) {
       throw new Error('Chưa đăng nhập Zalo. Vui lòng quét mã QR trước.');
     }
 
     const payload = typeof message === 'string' ? { msg: message } : message;
-    const result = await this.api.sendMessage(payload, threadId, threadType);
+    const result = await this.api.sendMessage(payload as any, threadId, threadType);
 
     try {
       const msgContent = typeof message === 'string' ? message : message.msg;
@@ -446,6 +446,69 @@ export class ZaloClientManager {
       avatarUrl,
       raw: foundUser,
     };
+  }
+
+  /**
+   * Get list of all aliases (tên gợi nhớ)
+   */
+  public async getAliases() {
+    if (!this.api) {
+      throw new Error('Chưa đăng nhập Zalo.');
+    }
+    const aliasRes: any = await (this.api as any).getAliasList({ count: 200, page: 1 });
+    return aliasRes?.items || aliasRes?.data?.items || aliasRes?.aliases || [];
+  }
+
+  /**
+   * Set alias (đặt biệt danh) for a user
+   */
+  public async setAlias(userId: string, alias: string) {
+    if (!this.api) {
+      throw new Error('Chưa đăng nhập Zalo.');
+    }
+    return await (this.api as any).changeFriendAlias(alias, userId);
+  }
+
+  /**
+   * Send a sticker
+   */
+  public async sendSticker(threadId: string, stickerId: number, threadType?: number) {
+    if (!this.api) {
+      throw new Error('Chưa đăng nhập Zalo.');
+    }
+    const stickersDetail: any = await this.api.getStickersDetail(stickerId);
+    if (!stickersDetail || stickersDetail.length === 0) {
+      throw new Error('Không tìm thấy thông tin Sticker.');
+    }
+    return await this.api.sendSticker(stickersDetail[0], threadId, threadType);
+  }
+
+  /**
+   * Get members of a group with roles (trưởng nhóm, phó nhóm, thành viên)
+   */
+  public async getGroupMembers(groupId: string) {
+    if (!this.api) {
+      throw new Error('Chưa đăng nhập Zalo.');
+    }
+    const groupInfo: any = await this.api.getGroupInfo(groupId);
+    const gridInfo = groupInfo?.gridInfo || groupInfo;
+    const memIds: string[] = gridInfo?.memIds || gridInfo?.memberIds || [];
+    
+    if (memIds.length === 0) return [];
+
+    const memberIdsForApi = memIds.map(id => `${id}_0`);
+    const res: any = await (this.api as any).getGroupMembersInfo(groupId, memberIdsForApi);
+    const profiles = res?.profiles || res?.membersInfo || res?.data?.membersInfo || {};
+    
+    return Object.entries(profiles).map(([uid, info]: [string, any]) => {
+      const memberId = uid.replace(/_0$/, '').trim();
+      return {
+        memberId,
+        displayName: info.displayName || info.zaloName || info.name || memberId,
+        avatar: info.avatar || info.avatarUrl || '',
+        role: info.role ?? (gridInfo?.creatorId === memberId ? 2 : (gridInfo?.adminIds?.includes(memberId) ? 1 : 0))
+      };
+    });
   }
 
   /**

@@ -183,7 +183,7 @@ router.post('/send-message', async (req: Request, res: Response) => {
   try {
     const appId = getAppId(req);
     const clientManager = ZaloClientManager.getInstance(appId);
-    const { threadId, message, threadType } = req.body;
+    const { threadId, message, threadType, quote } = req.body;
 
     if (!threadId || !message) {
       return res.status(400).json({
@@ -193,7 +193,14 @@ router.post('/send-message', async (req: Request, res: Response) => {
     }
 
     const typeNum = parseThreadType(threadType);
-    const result = await clientManager.sendMessage(threadId, message, typeNum);
+    let msgPayload: any = message;
+    if (quote) {
+      msgPayload = {
+        msg: message,
+        quote: quote
+      };
+    }
+    const result = await clientManager.sendMessage(threadId, msgPayload, typeNum);
     return res.json({
       success: true,
       result,
@@ -355,6 +362,82 @@ router.get('/conversations', async (req: Request, res: Response) => {
       success: false,
       error: error.message || 'Không thể lấy danh sách cuộc hội thoại',
     });
+  }
+});
+
+/**
+ * GET /api/zalo/aliases
+ * Lấy danh sách biệt danh (Alias) từ Zalo
+ */
+router.get(['/aliases', '/alias-list'], async (req: Request, res: Response) => {
+  try {
+    const appId = getAppId(req);
+    const clientManager = ZaloClientManager.getInstance(appId);
+    const aliases = await clientManager.getAliases();
+    return res.json({
+      success: true,
+      aliases,
+    });
+  } catch (error: any) {
+    return res.status(500).json({
+      success: false,
+      error: error.message || 'Lỗi khi lấy danh sách biệt danh',
+    });
+  }
+});
+
+/**
+ * POST /api/zalo/set-alias
+ * Đặt biệt danh (Alias) cho bạn bè
+ */
+router.post('/set-alias', async (req: Request, res: Response) => {
+  try {
+    const appId = getAppId(req);
+    const clientManager = ZaloClientManager.getInstance(appId);
+    const { userId, alias } = req.body;
+    if (!userId || alias === undefined) {
+      return res.status(400).json({ success: false, error: 'Thiếu userId hoặc alias' });
+    }
+    const result = await clientManager.setAlias(userId, alias);
+    return res.json({ success: true, result });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, error: error.message || 'Lỗi đặt biệt danh' });
+  }
+});
+
+/**
+ * POST /api/zalo/send-sticker
+ * Gửi sticker Zalo
+ */
+router.post('/send-sticker', async (req: Request, res: Response) => {
+  try {
+    const appId = getAppId(req);
+    const clientManager = ZaloClientManager.getInstance(appId);
+    const { threadId, stickerId, threadType } = req.body;
+    if (!threadId || !stickerId) {
+      return res.status(400).json({ success: false, error: 'Thiếu threadId hoặc stickerId' });
+    }
+    const typeNum = parseThreadType(threadType);
+    const result = await clientManager.sendSticker(threadId, Number(stickerId), typeNum);
+    return res.json({ success: true, result });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, error: error.message || 'Gửi sticker thất bại' });
+  }
+});
+
+/**
+ * GET /api/zalo/group-members/:groupId
+ * Lấy danh sách thành viên nhóm & vai trò
+ */
+router.get('/group-members/:groupId', async (req: Request, res: Response) => {
+  try {
+    const appId = getAppId(req);
+    const clientManager = ZaloClientManager.getInstance(appId);
+    const { groupId } = req.params;
+    const members = await clientManager.getGroupMembers(groupId);
+    return res.json({ success: true, members });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, error: error.message || 'Lỗi tải danh sách thành viên nhóm' });
   }
 });
 
