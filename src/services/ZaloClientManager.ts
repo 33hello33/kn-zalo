@@ -253,23 +253,29 @@ export class ZaloClientManager {
 
     // Chuẩn hóa cấu trúc quote nếu người dùng thực hiện reply tin nhắn
     if (payload.quote) {
-      const q = payload.quote.data || payload.quote;
-      const isGroup = threadType === 1;
+      const quoteParsed = typeof payload.quote === 'string' ? JSON.parse(payload.quote) : payload.quote;
+      const quoteData = quoteParsed.data || quoteParsed;
+      const isGroup = (threadType === 1 || threadType === ('group' as any));
 
-      let quoteContent = q.content || q.msg || q.text || '';
+      let quoteContent = quoteData.content || quoteData.msg || quoteData.text || '';
+      let quoteMsgType = quoteData.msgType || 'webchat';
+      if (quoteMsgType === 'chat.recommended' || quoteMsgType === 'chat.link' || quoteMsgType === 'text') {
+        quoteMsgType = 'webchat';
+      }
+
       if (!isGroup && typeof quoteContent === 'object' && quoteContent !== null) {
         quoteContent = JSON.stringify(quoteContent);
       }
 
       payload.quote = {
         content: quoteContent,
-        msgType: q.msgType || 'webchat',
-        propertyExt: q.propertyExt || undefined,
-        uidFrom: String(q.uidFrom || q.senderUid || q.sender_id || '0'),
-        msgId: String(q.msgId || '0'),
-        cliMsgId: String(q.cliMsgId || q.msgId || '0'),
-        ts: String(q.ts || q.timestamp || Date.now()),
-        ttl: q.ttl || 0,
+        msgType: quoteMsgType,
+        propertyExt: quoteData.propertyExt ?? undefined,
+        uidFrom: String(quoteData.uidFrom || quoteData.senderUid || quoteData.sender_id || quoteData.ownerId || '0'),
+        msgId: String(quoteData.msgId || quoteData.globalMsgId || '0'),
+        cliMsgId: String(quoteData.cliMsgId || quoteData.msgId || '0'),
+        ts: String(quoteData.ts || quoteData.timestamp || Date.now()),
+        ttl: quoteData.ttl ?? 0,
       };
     }
 
