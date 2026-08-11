@@ -249,8 +249,31 @@ export class ZaloClientManager {
       throw new Error('Chưa đăng nhập Zalo. Vui lòng quét mã QR trước.');
     }
 
-    const payload = typeof message === 'string' ? { msg: message } : message;
-    const result = await this.api.sendMessage(payload as any, threadId, threadType);
+    let payload: any = typeof message === 'string' ? { msg: message } : { ...message };
+
+    // Chuẩn hóa cấu trúc quote nếu người dùng thực hiện reply tin nhắn
+    if (payload.quote) {
+      const q = payload.quote.data || payload.quote;
+      const isGroup = threadType === 1;
+
+      let quoteContent = q.content || q.msg || q.text || '';
+      if (!isGroup && typeof quoteContent === 'object' && quoteContent !== null) {
+        quoteContent = JSON.stringify(quoteContent);
+      }
+
+      payload.quote = {
+        content: quoteContent,
+        msgType: q.msgType || 'webchat',
+        propertyExt: q.propertyExt || undefined,
+        uidFrom: String(q.uidFrom || q.senderUid || q.sender_id || '0'),
+        msgId: String(q.msgId || '0'),
+        cliMsgId: String(q.cliMsgId || q.msgId || '0'),
+        ts: String(q.ts || q.timestamp || Date.now()),
+        ttl: q.ttl || 0,
+      };
+    }
+
+    const result = await this.api.sendMessage(payload, threadId, threadType);
 
     try {
       const msgContent = typeof message === 'string' ? message : message.msg;
