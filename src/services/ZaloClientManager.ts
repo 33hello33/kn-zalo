@@ -356,7 +356,7 @@ export class ZaloClientManager {
   /**
    * Send a general file to a thread (friend or group)
    */
-  public async sendFile(threadId: string, filePath: string, threadType?: number) {
+  public async sendFile(threadId: string, filePath: string, threadType?: number, originalName?: string) {
     if (!this.api) {
       throw new Error('Chưa đăng nhập Zalo.');
     }
@@ -365,10 +365,18 @@ export class ZaloClientManager {
       throw new Error(`File không tồn tại: ${filePath}`);
     }
 
-    const baseName = path.basename(filePath);
+    const buffer = fs.readFileSync(filePath);
+    const baseName = originalName || path.basename(filePath);
+
+    const attachment: any = {
+      data: buffer,
+      filename: baseName,
+      metadata: { totalSize: buffer.length },
+    };
+
     const payload = {
       msg: '',
-      attachments: [filePath],
+      attachments: [attachment],
     };
 
     const result = await this.api.sendMessage(payload, threadId, threadType);
@@ -382,7 +390,7 @@ export class ZaloClientManager {
         thread_type: threadType === 1 ? 'group' : 'user',
         msg_type: 'file',
         content: `[File] ${baseName}`,
-        attachments: [{ filename: baseName }],
+        attachments: [{ filename: baseName, size: buffer.length }],
       }, this.appId);
     } catch (e: any) {
       console.error(`[ZaloClientManager][${this.appId}] Error saving sent file message:`, e.message);

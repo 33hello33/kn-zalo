@@ -217,12 +217,13 @@ router.post('/send-message', async (req: Request, res: Response) => {
  * POST /api/zalo/send-image
  * Gửi hình ảnh đính kèm (multipart/form-data: field name là 'file' hoặc 'image')
  */
-router.post('/send-image', upload.single('file'), async (req: Request, res: Response) => {
+router.post('/send-image', upload.fields([{ name: 'file', maxCount: 1 }, { name: 'image', maxCount: 1 }]), async (req: Request, res: Response) => {
   let tempFilePath = '';
   try {
     const appId = getAppId(req);
     const clientManager = ZaloClientManager.getInstance(appId);
-    const file = req.file;
+    const files = req.files as { [fieldname: string]: Express.Multer.File[] };
+    const file = files?.['file']?.[0] || files?.['image']?.[0] || req.file;
     const { threadId, threadType, caption } = req.body;
 
     if (!file || !threadId) {
@@ -275,7 +276,7 @@ router.post('/send-file', upload.single('file'), async (req: Request, res: Respo
 
     tempFilePath = file.path;
     const typeNum = parseThreadType(threadType);
-    const result = await clientManager.sendFile(threadId, tempFilePath, typeNum);
+    const result = await clientManager.sendFile(threadId, tempFilePath, typeNum, file.originalname);
 
     return res.json({
       success: true,
