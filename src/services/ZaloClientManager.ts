@@ -5,6 +5,7 @@ import { broadcastQRUpdate, broadcastStatusChange, broadcastNewMessage } from '.
 import fs from 'fs';
 import path from 'path';
 import { imageSize } from 'image-size';
+import { uploadMediaFile } from './ZaloStorageService';
 
 export class ZaloClientManager {
   private static instances: Map<string, ZaloClientManager> = new Map();
@@ -322,6 +323,14 @@ export class ZaloClientManager {
       height = dim.height ?? 0;
     } catch {}
 
+    // Upload to Supabase Storage bucket 'uploads/{appId}/...' with local fallback
+    let publicUrl = '';
+    try {
+      publicUrl = await uploadMediaFile(this.appId, filePath, baseName);
+    } catch (e) {
+      console.warn(`[ZaloClientManager] Could not upload file:`, e);
+    }
+
     const attachment: any = {
       data: buffer,
       filename: baseName,
@@ -344,13 +353,19 @@ export class ZaloClientManager {
         thread_type: threadType === 1 ? 'group' : 'user',
         msg_type: 'image',
         content: caption || `[Hình ảnh] ${baseName}`,
-        attachments: [{ filename: baseName, size: buffer.length }],
+        attachments: [{ filename: baseName, size: buffer.length, url: publicUrl, thumbUrl: publicUrl, hdUrl: publicUrl, href: publicUrl }],
       }, this.appId);
     } catch (e: any) {
       console.error(`[ZaloClientManager][${this.appId}] Error saving sent image message:`, e.message);
     }
 
-    return result;
+    return {
+      ...(typeof result === 'object' ? result : { result }),
+      publicUrl,
+      url: publicUrl,
+      thumbUrl: publicUrl,
+      href: publicUrl
+    };
   }
 
   /**
@@ -367,6 +382,14 @@ export class ZaloClientManager {
 
     const buffer = fs.readFileSync(filePath);
     const baseName = originalName || path.basename(filePath);
+
+    // Upload to Supabase Storage bucket 'uploads/{appId}/...' with local fallback
+    let publicUrl = '';
+    try {
+      publicUrl = await uploadMediaFile(this.appId, filePath, baseName);
+    } catch (e) {
+      console.warn(`[ZaloClientManager] Could not upload file:`, e);
+    }
 
     const attachment: any = {
       data: buffer,
@@ -390,13 +413,18 @@ export class ZaloClientManager {
         thread_type: threadType === 1 ? 'group' : 'user',
         msg_type: 'file',
         content: `[File] ${baseName}`,
-        attachments: [{ filename: baseName, size: buffer.length }],
+        attachments: [{ filename: baseName, size: buffer.length, url: publicUrl, href: publicUrl }],
       }, this.appId);
     } catch (e: any) {
       console.error(`[ZaloClientManager][${this.appId}] Error saving sent file message:`, e.message);
     }
 
-    return result;
+    return {
+      ...(typeof result === 'object' ? result : { result }),
+      publicUrl,
+      url: publicUrl,
+      href: publicUrl
+    };
   }
 
   /**
