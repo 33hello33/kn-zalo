@@ -255,11 +255,6 @@ export class ZaloClientManager {
         this._scheduleListenerRestart(api);
       });
 
-      // Also handle WebSocket close so we can reconnect when the connection drops.
-      api.listener.on('close', () => {
-        console.warn(`[ZaloListener][${this.appId}] Listener closed — scheduling restart.`);
-        this._scheduleListenerRestart(api);
-      });
 
       api.listener.start();
       this.listenerRestartCount = 0; // reset backoff counter on clean start
