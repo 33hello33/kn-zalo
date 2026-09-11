@@ -14,6 +14,8 @@ export class ZaloClientManager {
   private zaloId: string | null = null;
   private userProfile: { zaloId?: string; displayName?: string; avatar?: string } | null = null;
   private latestQRData: { qr: string; status: string } = { qr: '', status: 'idle' };
+  private listenerRestartCount = 0;
+  private listenerRestartTimer: ReturnType<typeof setTimeout> | null = null;
 
   private constructor(appId: string) {
     this.appId = appId;
@@ -201,9 +203,17 @@ export class ZaloClientManager {
   }
 
   /**
-   * Start listening for incoming Zalo messages
+   * Start listening for incoming Zalo messages.
+   * Includes error handling and auto-restart to prevent server crashes
+   * when zca-js receives a null/malformed WebSocket frame.
    */
   private startMessageListener(api: API) {
+    // Clear any pending restart timer
+    if (this.listenerRestartTimer) {
+      clearTimeout(this.listenerRestartTimer);
+      this.listenerRestartTimer = null;
+    }
+
     try {
       api.listener.on('message', (message: any) => {
         console.log(`[ZaloListener][${this.appId}] New Message:`, message);
@@ -235,11 +245,61 @@ export class ZaloClientManager {
         broadcastNewMessage(this.appId, { type: 'group_event', data: eventData });
       });
 
+      // ── Critical: handle errors emitted by the Listener (e.g. null WebSocket
+      // frames that cause "Cannot use 'in' operator to search for 'params' in null").
+      // Without this handler Node.js would crash the entire process.
+      api.listener.on('error', (err: any) => {
+        console.error(`[ZaloListener][${this.appId}] Listener error (non-fatal):`, err?.message || err);
+        // Schedule a restart after a short delay so transient errors don't
+        // spin-loop, but the listener recovers automatically.
+        this._scheduleListenerRestart(api);
+      });
+
+      // Also handle WebSocket close so we can reconnect when the connection drops.
+      api.listener.on('close', () => {
+        console.warn(`[ZaloListener][${this.appId}] Listener closed — scheduling restart.`);
+        this._scheduleListenerRestart(api);
+      });
+
       api.listener.start();
+      this.listenerRestartCount = 0; // reset backoff counter on clean start
       console.log(`[ZaloListener][${this.appId}] Started real-time message listener.`);
     } catch (err: any) {
       console.error(`[ZaloListener][${this.appId}] Error starting listener:`, err.message);
+      // Retry after a delay if initial start fails
+      this._scheduleListenerRestart(api);
     }
+  }
+
+  /**
+   * Schedule a listener restart with exponential backoff (max 60 s).
+   * Prevents rapid-fire restarts when the connection is persistently broken.
+   */
+  private _scheduleListenerRestart(api: API) {
+    if (this.listenerRestartTimer) return; // already scheduled
+
+    const MAX_BACKOFF_MS = 60_000;
+    const backoffMs = Math.min(3_000 * Math.pow(2, this.listenerRestartCount), MAX_BACKOFF_MS);
+    this.listenerRestartCount++;
+
+    console.log(`[ZaloListener][${this.appId}] Restart #${this.listenerRestartCount} in ${backoffMs / 1000}s...`);
+
+    this.listenerRestartTimer = setTimeout(() => {
+      this.listenerRestartTimer = null;
+      if (!this.api) {
+        console.warn(`[ZaloListener][${this.appId}] API no longer available — skipping restart.`);
+        return;
+      }
+      console.log(`[ZaloListener][${this.appId}] Restarting listener now.`);
+      try {
+        api.listener.start();
+        this.listenerRestartCount = 0;
+        console.log(`[ZaloListener][${this.appId}] Listener restarted successfully.`);
+      } catch (e: any) {
+        console.error(`[ZaloListener][${this.appId}] Failed to restart listener:`, e.message);
+        this._scheduleListenerRestart(api);
+      }
+    }, backoffMs);
   }
 
   /**

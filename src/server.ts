@@ -9,6 +9,19 @@ import { ZaloClientManager } from './services/ZaloClientManager';
 
 dotenv.config();
 
+// ── Global safety net ──────────────────────────────────────────────────────────
+// Catches any unhandled error that was not caught by a more specific handler
+// (e.g. a missing EventEmitter 'error' listener in a third-party library).
+// Without these, Node.js would kill the entire process on the first unhandled
+// error — which is what caused the "Cannot use 'in' operator" zca-js crash.
+process.on('uncaughtException', (err) => {
+  console.error('[Process] Uncaught Exception (server kept alive):', err);
+});
+
+process.on('unhandledRejection', (reason) => {
+  console.error('[Process] Unhandled Promise Rejection (server kept alive):', reason);
+});
+
 const app = express();
 const PORT = process.env.PORT || 5000;
 
