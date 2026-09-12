@@ -108,27 +108,38 @@ router.get('/friends', async (req: Request, res: Response) => {
 });
 
 /**
- * GET /api/zalo/search-phone?phone=0xxxxxxxxx
- * Tìm kiếm người dùng theo số điện thoại và lấy tên gợi nhớ (alias)
+ * GET /api/zalo/search-phone?phone=0xxxxxxxxx&mahv=HV001
+ * Tìm kiếm người dùng theo số điện thoại và lấy tên gợi nhớ (alias).
+ * Nếu không tìm thấy bằng SĐT và có truyền mahv/alias, tự động tìm alias theo mã học viên.
  */
 router.get('/search-phone', async (req: Request, res: Response) => {
   try {
     const appId = getAppId(req);
     const clientManager = ZaloClientManager.getInstance(appId);
     const phone = req.query.phone as string;
-    if (!phone) {
+    const mahv = (req.query.mahv || req.query.alias) as string;
+
+    if (!phone && !mahv) {
       return res.status(400).json({
         success: false,
-        error: 'Thiếu tham số query phone',
+        error: 'Thiếu tham số query phone hoặc mahv',
       });
     }
 
-    const contact = await clientManager.findUserByPhone(phone);
+    let contact: any = phone ? await clientManager.findUserByPhone(phone) : null;
+    let matchedBy = contact ? 'phone' : null;
+
+    // Khi search Zalo bằng SĐT không được, search thử alias theo mã học viên
+    if (!contact && mahv) {
+      contact = await clientManager.findUserByAlias(mahv);
+      if (contact) matchedBy = 'alias';
+    }
+
     if (!contact) {
       return res.json({
         success: true,
         found: false,
-        message: 'Không tìm thấy người dùng với số điện thoại này',
+        message: 'Không tìm thấy người dùng với số điện thoại hoặc mã học viên này',
         contact: null,
       });
     }
@@ -136,12 +147,53 @@ router.get('/search-phone', async (req: Request, res: Response) => {
     return res.json({
       success: true,
       found: true,
+      matchedBy,
       contact,
     });
   } catch (error: any) {
     return res.status(500).json({
       success: false,
-      error: error.message || 'Lỗi khi tìm kiếm người dùng theo số điện thoại',
+      error: error.message || 'Lỗi khi tìm kiếm người dùng theo số điện thoại / mã học viên',
+    });
+  }
+});
+
+/**
+ * GET /api/zalo/search-alias?alias=HV001 (hoặc ?mahv=HV001)
+ * Tìm kiếm người dùng theo alias (tên gợi nhớ) theo mã học viên, lấy ra người đầu tiên
+ */
+router.get('/search-alias', async (req: Request, res: Response) => {
+  try {
+    const appId = getAppId(req);
+    const clientManager = ZaloClientManager.getInstance(appId);
+    const alias = (req.query.alias || req.query.mahv || req.query.q) as string;
+    if (!alias) {
+      return res.status(400).json({
+        success: false,
+        error: 'Thiếu tham số query alias hoặc mahv',
+      });
+    }
+
+    const contact = await clientManager.findUserByAlias(alias);
+    if (!contact) {
+      return res.json({
+        success: true,
+        found: false,
+        message: 'Không tìm thấy người dùng với alias này',
+        contact: null,
+      });
+    }
+
+    return res.json({
+      success: true,
+      found: true,
+      matchedBy: 'alias',
+      contact,
+    });
+  } catch (error: any) {
+    return res.status(500).json({
+      success: false,
+      error: error.message || 'Lỗi khi tìm kiếm người dùng theo alias',
     });
   }
 });

@@ -623,6 +623,62 @@ export class ZaloClientManager {
   }
 
   /**
+   * Search user / friend by alias (tên gợi nhớ / mã học viên), lấy ra người đầu tiên
+   */
+  public async findUserByAlias(aliasQuery: string) {
+    if (!this.api) {
+      throw new Error('Chưa đăng nhập Zalo.');
+    }
+    const clean = String(aliasQuery || '').trim().toLowerCase();
+    if (!clean) return null;
+
+    // 1. Quét qua getAliases()
+    try {
+      const aliases = await this.getAliases();
+      const matched = aliases.find((item: any) => {
+        const text = String(item.alias || item.name || '').toLowerCase();
+        return text.includes(clean);
+      });
+      if (matched) {
+        const userId = String(matched.userId || matched.uid || matched.id || '');
+        return {
+          userId,
+          displayName: matched.alias || matched.name || userId,
+          alias: matched.alias || matched.name || '',
+          resolvedName: matched.alias || matched.name || userId,
+          matchedBy: 'alias',
+          raw: matched,
+        };
+      }
+    } catch {}
+
+    // 2. Quét qua getFriends()
+    try {
+      const friends = await this.getFriends();
+      const matched = friends.find((f: any) => {
+        const text = String(f.alias || f.friendAlias || f.displayNameResolved || f.displayName || '').toLowerCase();
+        return text.includes(clean);
+      });
+      if (matched) {
+        const userId = String(matched.userId || matched.uid || matched.id || '');
+        const alias = matched.alias || matched.friendAlias || '';
+        const resolvedName = matched.displayNameResolved || alias || matched.displayName || userId;
+        return {
+          userId,
+          displayName: matched.displayName || alias || userId,
+          alias,
+          resolvedName,
+          avatarUrl: matched.avatar || matched.avatarUrl || '',
+          matchedBy: 'alias',
+          raw: matched,
+        };
+      }
+    } catch {}
+
+    return null;
+  }
+
+  /**
    * Get list of all aliases (tên gợi nhớ bạn đã đặt trong Zalo app) with full pagination
    */
   public async getAliases() {
