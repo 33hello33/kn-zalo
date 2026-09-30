@@ -560,14 +560,85 @@ export class ZaloClientManager {
   }
 
   /**
-   * Get list of groups
+   * Get list of groups with full details (name, avatar, members count)
    */
   public async getGroups() {
     if (!this.api) {
       throw new Error('Chưa đăng nhập Zalo.');
     }
-    const groups = await this.api.getAllGroups();
-    return groups;
+    const res: any = await this.api.getAllGroups();
+    const gridVerMap = res?.gridVerMap || {};
+    const groupIds = Object.keys(gridVerMap);
+
+    if (groupIds.length === 0) {
+      return [];
+    }
+
+    const BATCH_SIZE = 50;
+    const groupList: any[] = [];
+
+    for (let i = 0; i < groupIds.length; i += BATCH_SIZE) {
+      const batchIds = groupIds.slice(i, i + BATCH_SIZE);
+      try {
+        const infoRes: any = await this.api.getGroupInfo(batchIds);
+        const gridInfoMap = infoRes?.gridInfoMap || {};
+        for (const [gid, gInfo] of Object.entries(gridInfoMap) as [string, any][]) {
+          groupList.push({
+            groupId: gid,
+            id: gid,
+            name: gInfo?.name || gid,
+            groupName: gInfo?.name || gid,
+            avatar: gInfo?.avt || gInfo?.fullAvt || '',
+            avatarUrl: gInfo?.avt || gInfo?.fullAvt || '',
+            desc: gInfo?.desc || '',
+            creatorId: gInfo?.creatorId || '',
+            totalMember: gInfo?.totalMember || (gInfo?.memberIds ? gInfo?.memberIds.length : 0),
+            memberIds: gInfo?.memberIds || [],
+            adminIds: gInfo?.adminIds || []
+          });
+        }
+      } catch (err: any) {
+        console.warn(`[ZaloClientManager][${this.appId}] Error fetching group info batch:`, err.message);
+        for (const gid of batchIds) {
+          if (!groupList.some(g => g.groupId === gid)) {
+            groupList.push({
+              groupId: gid,
+              id: gid,
+              name: gid,
+              groupName: gid,
+              avatar: '',
+              avatarUrl: ''
+            });
+          }
+        }
+      }
+    }
+
+    return groupList;
+  }
+
+  /**
+   * Get full info for a single group
+   */
+  public async getGroupInfo(groupId: string) {
+    if (!this.api) {
+      throw new Error('Chưa đăng nhập Zalo.');
+    }
+    const infoRes: any = await this.api.getGroupInfo(groupId);
+    const gridInfo = infoRes?.gridInfoMap?.[groupId] || infoRes?.gridInfo || infoRes;
+    return {
+      groupId,
+      id: groupId,
+      name: gridInfo?.name || groupId,
+      groupName: gridInfo?.name || groupId,
+      avatar: gridInfo?.avt || gridInfo?.fullAvt || '',
+      avatarUrl: gridInfo?.avt || gridInfo?.fullAvt || '',
+      desc: gridInfo?.desc || '',
+      totalMember: gridInfo?.totalMember || (gridInfo?.memberIds ? gridInfo?.memberIds.length : 0),
+      creatorId: gridInfo?.creatorId || '',
+      adminIds: gridInfo?.adminIds || [],
+      memberIds: gridInfo?.memberIds || []
+    };
   }
 
   /**

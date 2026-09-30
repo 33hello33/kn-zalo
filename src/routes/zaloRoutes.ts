@@ -513,6 +513,22 @@ router.post('/send-sticker', async (req: Request, res: Response) => {
 });
 
 /**
+ * GET /api/zalo/group-info/:groupId
+ * Lấy thông tin chi tiết một nhóm (Tên nhóm, Avatar, Số thành viên, v.v.)
+ */
+router.get('/group-info/:groupId', async (req: Request, res: Response) => {
+  try {
+    const appId = getAppId(req);
+    const clientManager = ZaloClientManager.getInstance(appId);
+    const { groupId } = req.params;
+    const info = await clientManager.getGroupInfo(groupId);
+    return res.json({ success: true, info });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, error: error.message || 'Lỗi tải thông tin nhóm' });
+  }
+});
+
+/**
  * GET /api/zalo/group-members/:groupId
  * Lấy danh sách thành viên nhóm & vai trò
  */
@@ -522,7 +538,17 @@ router.get('/group-members/:groupId', async (req: Request, res: Response) => {
     const clientManager = ZaloClientManager.getInstance(appId);
     const { groupId } = req.params;
     const members = await clientManager.getGroupMembers(groupId);
-    return res.json({ success: true, members });
+    let groupInfo: any = null;
+    try {
+      groupInfo = await clientManager.getGroupInfo(groupId);
+    } catch {}
+    return res.json({
+      success: true,
+      members,
+      groupName: groupInfo?.name || groupId,
+      avatar: groupInfo?.avatar || '',
+      info: groupInfo
+    });
   } catch (error: any) {
     return res.status(500).json({ success: false, error: error.message || 'Lỗi tải danh sách thành viên nhóm' });
   }
