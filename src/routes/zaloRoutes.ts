@@ -359,17 +359,60 @@ router.get('/messages/group/:groupId', async (req: Request, res: Response) => {
     const { groupId } = req.params;
     const count = req.query.count ? Number(req.query.count) : 50;
 
-    const history = await clientManager.getGroupChatHistory(groupId, count);
+    let history: any = null;
+    try {
+      history = await clientManager.getGroupChatHistory(groupId, count);
+    } catch (apiErr: any) {
+      console.warn(`[zaloRoutes][${appId}] getGroupChatHistory error:`, apiErr?.message);
+    }
+
+    let msgs: any[] = [];
+    if (history) {
+      if (Array.isArray(history)) {
+        msgs = history;
+      } else if (Array.isArray(history.groupMsgs)) {
+        msgs = history.groupMsgs;
+      } else if (Array.isArray(history.messages)) {
+        msgs = history.messages;
+      } else if (Array.isArray(history.data)) {
+        msgs = history.data;
+      }
+    }
+
+    // Fallback: nếu Zalo API không trả về hoặc trả về rỗng, lấy từ Supabase (zalo_messages)
+    if (!msgs || msgs.length === 0) {
+      try {
+        const stored = await ZaloMessageStore.getMessagesByThread(groupId, count, appId);
+        if (Array.isArray(stored) && stored.length > 0) {
+          msgs = stored;
+        }
+      } catch (storeErr: any) {
+        console.warn(`[zaloRoutes][${appId}] ZaloMessageStore fallback error:`, storeErr?.message);
+      }
+    }
+
     return res.json({
       success: true,
-      count: Array.isArray(history) ? history.length : 0,
-      messages: history,
+      count: msgs.length,
+      messages: msgs,
     });
   } catch (error: any) {
-    return res.status(500).json({
-      success: false,
-      error: error.message || 'Không thể lấy lịch sử tin nhắn nhóm',
-    });
+    try {
+      const appId = getAppId(req);
+      const { groupId } = req.params;
+      const count = req.query.count ? Number(req.query.count) : 50;
+      const stored = await ZaloMessageStore.getMessagesByThread(groupId, count, appId);
+      return res.json({
+        success: true,
+        count: stored.length,
+        messages: stored,
+      });
+    } catch {
+      return res.status(500).json({
+        success: false,
+        error: error.message || 'Không thể lấy lịch sử tin nhắn nhóm',
+      });
+    }
   }
 });
 
