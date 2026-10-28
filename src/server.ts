@@ -6,6 +6,7 @@ import path from 'path';
 import zaloRoutes from './routes/zaloRoutes';
 import { initSocketServer } from './sockets/zaloSocket';
 import { ZaloClientManager } from './services/ZaloClientManager';
+import { ZaloSessionStore } from './services/ZaloSessionStore';
 
 dotenv.config();
 
@@ -51,10 +52,27 @@ httpServer.listen(PORT, async () => {
   console.log(`📡 WebSocket ready with per-app room isolation`);
   console.log(`===================================================`);
 
-  // Auto restore sessions for default instance on boot
+  // Auto restore sessions for every appId that has an active session
   try {
-    await ZaloClientManager.getInstance('default').autoRestoreSession();
+    const activeAppIds = await ZaloSessionStore.getActiveAppIds();
+    const appIds = [...new Set(['default', ...activeAppIds])];
+    console.log(`🔑 Auto-restoring Zalo sessions for appId: ${appIds.join(', ')}`);
+    for (const appId of appIds) {
+      try {
+        await Promise.race([
+          ZaloClientManager.getInstance(appId).autoRestoreSession(),
+          new Promise<boolean>((resolve) => {
+            setTimeout(() => {
+              console.warn(`[Server Boot] Auto-restore timeout (${appId}) - bỏ qua để khôi phục các appId khác`);
+              resolve(false);
+            }, 20000);
+          })
+        ]);
+      } catch (err: any) {
+        console.error(`[Server Boot] Auto-restore session error (${appId}):`, err.message);
+      }
+    }
   } catch (err: any) {
-    console.error('[Server Boot] Auto-restore default session error:', err.message);
+    console.error('[Server Boot] Auto-restore sessions error:', err.message);
   }
 });

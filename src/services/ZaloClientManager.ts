@@ -16,6 +16,9 @@ export class ZaloClientManager {
   private latestQRData: { qr: string; status: string } = { qr: '', status: 'idle' };
   private listenerRestartCount = 0;
   private listenerRestartTimer: ReturnType<typeof setTimeout> | null = null;
+  private restorePromise: Promise<boolean> | null = null;
+  private lastRestoreAttempt = 0;
+  private static readonly RESTORE_COOLDOWN_MS = 30000;
 
   private constructor(appId: string) {
     this.appId = appId;
@@ -155,6 +158,24 @@ export class ZaloClientManager {
   }
 
   /**
+   * Đảm bảo phiên Zalo của appId này đã được khôi phục từ Supabase.
+   * Server (Render) hay restart/spin-down nên bộ nhớ phiên bị mất; nếu chỉ khôi phục
+   * 'default' thì mọi appId khác sẽ báo "Chưa đăng nhập Zalo." dù đã lưu session.
+   * Có cooldown để không truy vấn DB liên tục khi thực sự chưa đăng nhập.
+   */
+  public async ensureSession(): Promise<boolean> {
+    if (this.api && this.zaloId) return true;
+    if (this.restorePromise) return this.restorePromise;
+    if (Date.now() - this.lastRestoreAttempt < ZaloClientManager.RESTORE_COOLDOWN_MS) return false;
+
+    this.lastRestoreAttempt = Date.now();
+    this.restorePromise = this.autoRestoreSession().finally(() => {
+      this.restorePromise = null;
+    });
+    return this.restorePromise;
+  }
+
+  /**
    * Auto restore session from Supabase on server startup for this appId
    */
   public async autoRestoreSession(): Promise<boolean> {
@@ -180,6 +201,21 @@ export class ZaloClientManager {
       if (!zaloId) {
         console.warn(`[ZaloClientManager][${this.appId}] Session restore returned invalid Zalo ID. Expiring session...`);
         await ZaloSessionStore.deactivateSession(session.zalo_id, this.appId);
+        return false;
+      }
+
+      // Cookie còn hạn hay không: session cũ vẫn trả zaloId nhưng gọi API sẽ lỗi zpw_sek.
+      // Gọi thử 1 API nhẹ; nếu Zalo báo hết phiên thì xóa session để buộc đăng nhập QR lại.
+      try {
+        await api.fetchAccountInfo();
+      } catch (verifyErr: any) {
+        const message = String(verifyErr?.message || verifyErr || '');
+        if (/zpw_sek|đăng nhập|login|cookie|401|403|unauthor/i.test(message)) {
+          console.warn(`[ZaloClientManager][${this.appId}] Phiên Zalo đã hết hiệu lực (${message}). Cần đăng nhập lại.`);
+          await ZaloSessionStore.deactivateSession(session.zalo_id, this.appId);
+        } else {
+          console.warn(`[ZaloClientManager][${this.appId}] Không kiểm tra được phiên Zalo: ${message}`);
+        }
         return false;
       }
 

@@ -73,6 +73,30 @@ export class ZaloSessionStore {
   }
 
   /**
+   * Danh sách app_id đang có phiên Zalo active (dùng để khôi phục tất cả khi server khởi động lại).
+   */
+  public static async getActiveAppIds(): Promise<string[]> {
+    if (!supabase) return [];
+    try {
+      const { data, error } = await supabase
+        .from('zalo_sessions')
+        .select('app_id, updated_at')
+        .eq('is_active', true)
+        .order('updated_at', { ascending: false });
+
+      if (error || !data) return [];
+
+      const ids = data
+        .map((row: any) => String(row.app_id || 'default').trim())
+        .filter(Boolean);
+      return [...new Set(ids)];
+    } catch (err: any) {
+      console.warn('[SessionStore] getActiveAppIds error:', err.message);
+      return [];
+    }
+  }
+
+  /**
    * Get the active session for specific appId from Supabase (or local fallback)
    */
   public static async getActiveSession(appId = 'default'): Promise<ZaloSessionData | null> {

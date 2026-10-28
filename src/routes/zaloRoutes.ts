@@ -33,6 +33,21 @@ const storage = multer.diskStorage({
 const upload = multer({ storage });
 
 /**
+ * Mỗi appId có một phiên Zalo riêng. Khi server restart (Render spin-down/redeploy),
+ * bộ nhớ phiên bị mất nên phải khôi phục lại từ Supabase trước khi xử lý request,
+ * nếu không mọi appId (trừ 'default' được khôi phục lúc boot) sẽ báo "Chưa đăng nhập Zalo.".
+ */
+router.use(async (req: Request, res: Response, next) => {
+  try {
+    const appId = getAppId(req);
+    await ZaloClientManager.getInstance(appId).ensureSession();
+  } catch (err: any) {
+    console.error('[zaloRoutes] ensureSession error:', err?.message || err);
+  }
+  next();
+});
+
+/**
  * GET /api/zalo/qr
  * Trả về dữ liệu ảnh QR Code đăng nhập
  */
