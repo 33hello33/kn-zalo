@@ -32,6 +32,37 @@ export class ZaloSessionInvalidError extends Error {
   }
 }
 
+const toMsgId = (value: any): number => {
+  const num = Number(value);
+  return Number.isFinite(num) && num > 0 ? num : 0;
+};
+
+/**
+ * Zalo trả `msgId = 0` khi tin KHÔNG được gửi (dù request không ném lỗi).
+ * Nếu chỉ dựa vào việc "không throw" thì hệ thống sẽ báo đã gửi dù thực tế chưa gửi.
+ * Chỉ coi là lỗi khi có bằng chứng rõ ràng, tránh báo lỗi giả.
+ */
+export function assertZaloSendAccepted(result: any): any {
+  if (!result) {
+    throw new Error('Zalo không trả về kết quả gửi tin');
+  }
+
+  const messageId = toMsgId(result.message?.msgId);
+  const attachments = Array.isArray(result.attachment) ? result.attachment : [];
+  const attachmentIds = attachments.map((item: any) => toMsgId(item?.msgId)).filter((id: number) => id > 0);
+
+  if (messageId > 0 || attachmentIds.length > 0) return result;
+
+  const explicitFailure =
+    (result.message && toMsgId(result.message.msgId) === 0) ||
+    (attachments.length > 0 && attachmentIds.length === 0);
+
+  if (explicitFailure) {
+    throw new Error('Zalo không gửi được tin nhắn (msgId = 0)');
+  }
+  return result;
+}
+
 export class ZaloClientManager {
   private static instances: Map<string, ZaloClientManager> = new Map();
   private appId: string;
@@ -482,7 +513,8 @@ export class ZaloClientManager {
       };
     }
 
-    const result = await this.withSession('sendMessage', () => this.api!.sendMessage(payload, threadId, threadType));
+    const result = await this.withSession('sendMessage', async () =>
+      assertZaloSendAccepted(await this.api!.sendMessage(payload, threadId, threadType)));
 
     try {
       const msgContent = typeof message === 'string' ? message : message.msg;
@@ -540,7 +572,8 @@ export class ZaloClientManager {
       attachments: [attachment],
     };
 
-    const result = await this.withSession('sendImage', () => this.api!.sendMessage(payload, threadId, threadType));
+    const result = await this.withSession('sendImage', async () =>
+      assertZaloSendAccepted(await this.api!.sendMessage(payload, threadId, threadType)));
 
     try {
       ZaloMessageStore.saveMessage({
@@ -596,7 +629,8 @@ export class ZaloClientManager {
       attachments: [attachment],
     };
 
-    const result = await this.withSession('sendFile', () => this.api!.sendMessage(payload, threadId, threadType));
+    const result = await this.withSession('sendFile', async () =>
+      assertZaloSendAccepted(await this.api!.sendMessage(payload, threadId, threadType)));
 
     try {
       ZaloMessageStore.saveMessage({

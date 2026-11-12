@@ -38,6 +38,53 @@ const sendZaloError = (res: Response, error: any, fallbackMessage: string, statu
   });
 };
 
+const SEND_DEDUPE_TTL_MS = 10 * 60 * 1000;
+const SEND_DEDUPE_MAX_ENTRIES = 500;
+const sendResultCache = new Map<string, { at: number; value: any }>();
+const sendInFlight = new Map<string, Promise<any>>();
+
+const getDedupeKey = (req: Request): string => {
+  const raw = req.body?.dedupeKey ?? req.headers['x-dedupe-key'];
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  return value ? String(value).trim().slice(0, 120) : '';
+};
+
+/**
+ * Chống gửi trùng: khi client timeout rồi bấm gửi lại (hoặc 2 tab cùng gửi 1 chứng từ),
+ * trả lại kết quả của lần gửi trước thay vì gửi thêm một tin nữa.
+ */
+const sendWithDedupe = async <T>(appId: string, dedupeKey: string, run: () => Promise<T>): Promise<T> => {
+  const key = dedupeKey ? `${appId}:${dedupeKey}` : '';
+  if (!key) return run();
+
+  const cached = sendResultCache.get(key);
+  if (cached && Date.now() - cached.at < SEND_DEDUPE_TTL_MS) {
+    console.log(`[zaloRoutes][${appId}] Bỏ qua gửi trùng (dedupeKey=${dedupeKey})`);
+    return cached.value as T;
+  }
+
+  const running = sendInFlight.get(key);
+  if (running) return running as Promise<T>;
+
+  const promise = run()
+    .then((value) => {
+      if (sendResultCache.size > SEND_DEDUPE_MAX_ENTRIES) {
+        const cutoff = Date.now() - SEND_DEDUPE_TTL_MS;
+        for (const [k, v] of sendResultCache) {
+          if (v.at < cutoff) sendResultCache.delete(k);
+        }
+      }
+      sendResultCache.set(key, { at: Date.now(), value });
+      return value;
+    })
+    .finally(() => {
+      sendInFlight.delete(key);
+    });
+
+  sendInFlight.set(key, promise);
+  return promise;
+};
+
 // Helper to extract appId from request headers or query params
 const getAppId = (req: Request): string => {
   const headerAppId = req.headers['x-app-id'] as string;
@@ -286,10 +333,12 @@ router.post('/send-message', async (req: Request, res: Response) => {
         quote: quote
       };
     }
-    const result = await clientManager.sendMessage(threadId, msgPayload, typeNum);
+    const result = await sendWithDedupe(appId, getDedupeKey(req), () =>
+      clientManager.sendMessage(threadId, msgPayload, typeNum));
     return res.json({
       success: true,
       result,
+      messageId: result?.message?.msgId || null,
     });
   } catch (error: any) {
     return sendZaloError(res, error, 'Gửi tin nhắn thất bại');
@@ -318,11 +367,13 @@ router.post('/send-image', upload.fields([{ name: 'file', maxCount: 1 }, { name:
 
     tempFilePath = file.path;
     const typeNum = parseThreadType(threadType);
-    const result = await clientManager.sendImage(threadId, tempFilePath, typeNum, caption, file.originalname);
+    const result = await sendWithDedupe(appId, getDedupeKey(req), () =>
+      clientManager.sendImage(threadId, tempFilePath, typeNum, caption, file.originalname));
 
     return res.json({
       success: true,
       result,
+      messageId: result?.message?.msgId || result?.attachment?.[0]?.msgId || null,
     });
   } catch (error: any) {
     return sendZaloError(res, error, 'Gửi ảnh thất bại');
@@ -356,11 +407,13 @@ router.post('/send-file', upload.single('file'), async (req: Request, res: Respo
 
     tempFilePath = file.path;
     const typeNum = parseThreadType(threadType);
-    const result = await clientManager.sendFile(threadId, tempFilePath, typeNum, file.originalname);
+    const result = await sendWithDedupe(appId, getDedupeKey(req), () =>
+      clientManager.sendFile(threadId, tempFilePath, typeNum, file.originalname));
 
     return res.json({
       success: true,
       result,
+      messageId: result?.message?.msgId || result?.attachment?.[0]?.msgId || null,
     });
   } catch (error: any) {
     return sendZaloError(res, error, 'Gửi file thất bại');
