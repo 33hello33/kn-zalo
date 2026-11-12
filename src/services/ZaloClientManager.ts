@@ -7,6 +7,31 @@ import path from 'path';
 import { imageSize } from 'image-size';
 import { uploadMediaFile } from './ZaloStorageService';
 
+export const ZALO_SESSION_INVALID_CODE = 'ZALO_SESSION_INVALID';
+export const ZALO_NOT_LOGGED_IN_MESSAGE = 'Chưa đăng nhập Zalo. Vui lòng quét mã QR đăng nhập.';
+export const ZALO_SESSION_INVALID_MESSAGE =
+  'Phiên đăng nhập Zalo đã hết hiệu lực (cookie zpw_sek không còn hợp lệ). Vui lòng quét mã QR đăng nhập lại.';
+
+/**
+ * Zalo trả về "zpw_sek bị thiếu hoặc không đúng" (hoặc lỗi tương tự) khi cookie phiên
+ * đã bị Zalo vô hiệu hoá. Khi đó phải đăng nhập QR lại, retry bằng cookie cũ sẽ không bao giờ thành công.
+ */
+const SESSION_INVALID_PATTERN =
+  /zpw_sek|zpw_ver|zpw_type|chưa đăng nhập|đăng nhập thất bại|hết hiệu lực|unauthor|invalid session|session expired|401|403/i;
+
+export const isSessionInvalidError = (err: any): boolean =>
+  SESSION_INVALID_PATTERN.test(String(err?.message || err || ''));
+
+export class ZaloSessionInvalidError extends Error {
+  public readonly code = ZALO_SESSION_INVALID_CODE;
+  public readonly sessionExpired = true;
+
+  constructor(message: string = ZALO_SESSION_INVALID_MESSAGE) {
+    super(message);
+    this.name = 'ZaloSessionInvalidError';
+  }
+}
+
 export class ZaloClientManager {
   private static instances: Map<string, ZaloClientManager> = new Map();
   private appId: string;
@@ -18,7 +43,9 @@ export class ZaloClientManager {
   private listenerRestartTimer: ReturnType<typeof setTimeout> | null = null;
   private restorePromise: Promise<boolean> | null = null;
   private lastRestoreAttempt = 0;
+  private lastVerifiedAt = 0;
   private static readonly RESTORE_COOLDOWN_MS = 30000;
+  private static readonly VERIFY_INTERVAL_MS = 5 * 60 * 1000;
 
   private constructor(appId: string) {
     this.appId = appId;
@@ -122,6 +149,8 @@ export class ZaloClientManager {
 
       this.api = api;
       this.zaloId = zaloId;
+      this.lastVerifiedAt = Date.now();
+      this.lastRestoreAttempt = 0;
       this.userProfile = {
         zaloId,
         displayName: accountInfo.displayName,
@@ -164,7 +193,10 @@ export class ZaloClientManager {
    * Có cooldown để không truy vấn DB liên tục khi thực sự chưa đăng nhập.
    */
   public async ensureSession(): Promise<boolean> {
-    if (this.api && this.zaloId) return true;
+    if (this.api && this.zaloId) {
+      await this.verifySessionIfStale();
+      return !!(this.api && this.zaloId);
+    }
     if (this.restorePromise) return this.restorePromise;
     if (Date.now() - this.lastRestoreAttempt < ZaloClientManager.RESTORE_COOLDOWN_MS) return false;
 
@@ -173,6 +205,29 @@ export class ZaloClientManager {
       this.restorePromise = null;
     });
     return this.restorePromise;
+  }
+
+  /**
+   * Kiểm tra định kỳ phiên đang giữ trong bộ nhớ.
+   * Zalo có thể vô hiệu hoá cookie (zpw_sek) bất cứ lúc nào (đăng nhập nơi khác, hết hạn...):
+   * khi đó `api` vẫn tồn tại nên /status báo "đã đăng nhập" nhưng mọi API zpw đều lỗi.
+   */
+  private async verifySessionIfStale(): Promise<void> {
+    if (!this.api) return;
+    if (Date.now() - this.lastVerifiedAt < ZaloClientManager.VERIFY_INTERVAL_MS) return;
+
+    const api = this.api;
+    try {
+      await api.fetchAccountInfo();
+      this.lastVerifiedAt = Date.now();
+    } catch (err: any) {
+      if (isSessionInvalidError(err)) {
+        await this.invalidateSession(`kiểm tra định kỳ: ${err?.message || err}`);
+      } else {
+        // Lỗi mạng tạm thời: giữ nguyên phiên, thử lại sau
+        console.warn(`[ZaloClientManager][${this.appId}] Không kiểm tra được phiên Zalo: ${err?.message || err}`);
+      }
+    }
   }
 
   /**
@@ -210,7 +265,7 @@ export class ZaloClientManager {
         await api.fetchAccountInfo();
       } catch (verifyErr: any) {
         const message = String(verifyErr?.message || verifyErr || '');
-        if (/zpw_sek|đăng nhập|login|cookie|401|403|unauthor/i.test(message)) {
+        if (isSessionInvalidError(verifyErr)) {
           console.warn(`[ZaloClientManager][${this.appId}] Phiên Zalo đã hết hiệu lực (${message}). Cần đăng nhập lại.`);
           await ZaloSessionStore.deactivateSession(session.zalo_id, this.appId);
         } else {
@@ -221,6 +276,7 @@ export class ZaloClientManager {
 
       this.api = api;
       this.zaloId = zaloId;
+      this.lastVerifiedAt = Date.now();
       this.userProfile = {
         zaloId,
         displayName: session.full_name,
@@ -234,7 +290,66 @@ export class ZaloClientManager {
       return true;
     } catch (err: any) {
       console.error(`[ZaloClientManager][${this.appId}] Failed to auto-restore session:`, err.message);
+      // Cookie đã chết hẳn (login cũng thất bại) => đánh dấu phiên inactive để buộc đăng nhập QR lại
+      if (isSessionInvalidError(err)) {
+        await ZaloSessionStore.deactivateSession(session.zalo_id, this.appId);
+      }
       return false;
+    }
+  }
+
+  /**
+   * Phiên đã bị Zalo vô hiệu hoá: xoá phiên trong bộ nhớ + đánh dấu inactive trong Supabase
+   * để giao diện biết phải quét QR đăng nhập lại (thay vì báo lỗi zpw_sek khó hiểu).
+   */
+  private async invalidateSession(reason: string): Promise<void> {
+    const zaloId = this.zaloId;
+    console.warn(`[ZaloClientManager][${this.appId}] Phiên Zalo không còn hiệu lực (${reason}). Cần đăng nhập lại bằng QR.`);
+
+    this.api = null;
+    this.zaloId = null;
+    this.userProfile = null;
+    this.lastVerifiedAt = 0;
+    this.latestQRData = { qr: '', status: 'expired' };
+    broadcastStatusChange(this.appId, false, null);
+
+    if (zaloId) {
+      try {
+        await ZaloSessionStore.deactivateSession(zaloId, this.appId);
+      } catch (err: any) {
+        console.error(`[ZaloClientManager][${this.appId}] Không cập nhật được trạng thái phiên:`, err?.message || err);
+      }
+    }
+  }
+
+  /**
+   * Chạy một thao tác Zalo: nếu Zalo báo phiên hết hiệu lực (zpw_sek) thì
+   * đánh dấu phiên chết, thử khôi phục lại từ Supabase và chạy lại 1 lần.
+   */
+  private async withSession<T>(label: string, task: () => Promise<T>): Promise<T> {
+    if (!this.api) {
+      const restored = await this.ensureSession();
+      if (!restored || !this.api) throw new ZaloSessionInvalidError(ZALO_NOT_LOGGED_IN_MESSAGE);
+    }
+
+    try {
+      return await task();
+    } catch (err: any) {
+      if (!isSessionInvalidError(err)) throw err;
+
+      await this.invalidateSession(`${label}: ${err?.message || err}`);
+      this.lastRestoreAttempt = 0;
+
+      const restored = await this.ensureSession();
+      if (!restored || !this.api) throw new ZaloSessionInvalidError();
+
+      try {
+        return await task();
+      } catch (retryErr: any) {
+        if (!isSessionInvalidError(retryErr)) throw retryErr;
+        await this.invalidateSession(`${label} (thử lại): ${retryErr?.message || retryErr}`);
+        throw new ZaloSessionInvalidError();
+      }
     }
   }
 
@@ -337,10 +452,6 @@ export class ZaloClientManager {
    * Send a text message to a thread (friend or group)
    */
   public async sendMessage(threadId: string, message: string | { msg: string; attachments?: any[]; quote?: any }, threadType?: number) {
-    if (!this.api) {
-      throw new Error('Chưa đăng nhập Zalo. Vui lòng quét mã QR trước.');
-    }
-
     let payload: any = typeof message === 'string' ? { msg: message } : { ...message };
 
     // Chuẩn hóa cấu trúc quote nếu người dùng thực hiện reply tin nhắn
@@ -371,7 +482,7 @@ export class ZaloClientManager {
       };
     }
 
-    const result = await this.api.sendMessage(payload, threadId, threadType);
+    const result = await this.withSession('sendMessage', () => this.api!.sendMessage(payload, threadId, threadType));
 
     try {
       const msgContent = typeof message === 'string' ? message : message.msg;
@@ -395,10 +506,6 @@ export class ZaloClientManager {
    * Send an image file to a thread (friend or group)
    */
   public async sendImage(threadId: string, filePath: string, threadType?: number, caption?: string, originalName?: string) {
-    if (!this.api) {
-      throw new Error('Chưa đăng nhập Zalo.');
-    }
-
     if (!fs.existsSync(filePath)) {
       throw new Error(`File không tồn tại: ${filePath}`);
     }
@@ -433,7 +540,7 @@ export class ZaloClientManager {
       attachments: [attachment],
     };
 
-    const result = await this.api.sendMessage(payload, threadId, threadType);
+    const result = await this.withSession('sendImage', () => this.api!.sendMessage(payload, threadId, threadType));
 
     try {
       ZaloMessageStore.saveMessage({
@@ -463,10 +570,6 @@ export class ZaloClientManager {
    * Send a general file to a thread (friend or group)
    */
   public async sendFile(threadId: string, filePath: string, threadType?: number, originalName?: string) {
-    if (!this.api) {
-      throw new Error('Chưa đăng nhập Zalo.');
-    }
-
     if (!fs.existsSync(filePath)) {
       throw new Error(`File không tồn tại: ${filePath}`);
     }
@@ -493,7 +596,7 @@ export class ZaloClientManager {
       attachments: [attachment],
     };
 
-    const result = await this.api.sendMessage(payload, threadId, threadType);
+    const result = await this.withSession('sendFile', () => this.api!.sendMessage(payload, threadId, threadType));
 
     try {
       ZaloMessageStore.saveMessage({
@@ -523,7 +626,7 @@ export class ZaloClientManager {
    */
   public async getGroupChatHistory(groupId: string, count: number = 50) {
     if (!this.api) {
-      throw new Error('Chưa đăng nhập Zalo.');
+      throw new ZaloSessionInvalidError(ZALO_NOT_LOGGED_IN_MESSAGE);
     }
 
     const history = await this.api.getGroupChatHistory(groupId, count);
@@ -537,10 +640,11 @@ export class ZaloClientManager {
    * Get list of friends merged with Aliases & Phonebook Contact Names (Biệt danh/Tên từ danh bạ điện thoại)
    */
   public async getFriends() {
-    if (!this.api) {
-      throw new Error('Chưa đăng nhập Zalo.');
-    }
-    const friends: any[] = await this.api.getAllFriends();
+    return this.withSession('getFriends', () => this.getFriendsInternal());
+  }
+
+  private async getFriendsInternal() {
+    const friends: any[] = await this.api!.getAllFriends();
     if (!Array.isArray(friends) || friends.length === 0) return [];
 
     // 1. Phân trang lấy tất cả Aliases từ Zalo Web API
@@ -553,7 +657,9 @@ export class ZaloClientManager {
           aliasMap[String(uId)] = item.alias;
         }
       });
-    } catch {}
+    } catch (aliasErr) {
+      if (isSessionInvalidError(aliasErr)) throw aliasErr;
+    }
 
     // 2. Batch fetch hồ sơ getUserInfo để lấy friendAlias/contactName trong danh bạ điện thoại
     const profileAliasMap: Record<string, string> = {};
@@ -577,10 +683,13 @@ export class ZaloClientManager {
             }
           }
         } catch (batchErr) {
+          if (isSessionInvalidError(batchErr)) throw batchErr;
           // Continue with next batch if any error occurs
         }
       }
-    } catch {}
+    } catch (err) {
+      if (isSessionInvalidError(err)) throw err;
+    }
 
     // 3. Kết hợp thông tin ưu tiên theo đúng thứ tự: Tên Biệt Danh bạn đặt trong Zalo App (aliasMap) > Friend Alias > Zalo Name
     return friends.map((f: any) => {
@@ -599,10 +708,11 @@ export class ZaloClientManager {
    * Get list of groups with full details (name, avatar, members count)
    */
   public async getGroups() {
-    if (!this.api) {
-      throw new Error('Chưa đăng nhập Zalo.');
-    }
-    const res: any = await this.api.getAllGroups();
+    return this.withSession('getGroups', () => this.getGroupsInternal());
+  }
+
+  private async getGroupsInternal() {
+    const res: any = await this.api!.getAllGroups();
     const gridVerMap = res?.gridVerMap || {};
     const groupIds = Object.keys(gridVerMap);
 
@@ -616,7 +726,7 @@ export class ZaloClientManager {
     for (let i = 0; i < groupIds.length; i += BATCH_SIZE) {
       const batchIds = groupIds.slice(i, i + BATCH_SIZE);
       try {
-        const infoRes: any = await this.api.getGroupInfo(batchIds);
+        const infoRes: any = await this.api!.getGroupInfo(batchIds);
         const gridInfoMap = infoRes?.gridInfoMap || {};
         for (const [gid, gInfo] of Object.entries(gridInfoMap) as [string, any][]) {
           groupList.push({
@@ -634,6 +744,7 @@ export class ZaloClientManager {
           });
         }
       } catch (err: any) {
+        if (isSessionInvalidError(err)) throw err;
         console.warn(`[ZaloClientManager][${this.appId}] Error fetching group info batch:`, err.message);
         for (const gid of batchIds) {
           if (!groupList.some(g => g.groupId === gid)) {
@@ -658,7 +769,7 @@ export class ZaloClientManager {
    */
   public async getGroupInfo(groupId: string) {
     if (!this.api) {
-      throw new Error('Chưa đăng nhập Zalo.');
+      throw new ZaloSessionInvalidError(ZALO_NOT_LOGGED_IN_MESSAGE);
     }
     const infoRes: any = await this.api.getGroupInfo(groupId);
     const gridInfo = infoRes?.gridInfoMap?.[groupId] || infoRes?.gridInfo || infoRes;
@@ -692,10 +803,10 @@ export class ZaloClientManager {
    * Search user/contact by phone number and resolve alias (tên gợi nhớ)
    */
   public async findUserByPhone(phone: string) {
-    if (!this.api) {
-      throw new Error('Chưa đăng nhập Zalo.');
-    }
+    return this.withSession('findUserByPhone', () => this.findUserByPhoneInternal(phone));
+  }
 
+  private async findUserByPhoneInternal(phone: string) {
     const foundUser: any = await (this.api as any).findUser(phone);
     if (!foundUser) {
       return null;
@@ -707,14 +818,16 @@ export class ZaloClientManager {
     let alias = foundUser.alias || '';
 
     try {
-      const friends: any[] = await this.api.getAllFriends();
+      const friends: any[] = await this.api!.getAllFriends();
       const friend = friends.find((f: any) => (f.userId || f.uid || f.id || f.user_id || f.contact_id) === userId);
       if (friend) {
         if (friend.alias) alias = friend.alias;
         if (!displayName) displayName = friend.displayName || friend.name || friend.zaloName || '';
         if (!avatarUrl) avatarUrl = friend.avatar || friend.avatarUrl || '';
       }
-    } catch {}
+    } catch (friendErr) {
+      if (isSessionInvalidError(friendErr)) throw friendErr;
+    }
 
     const resolvedName = alias || displayName || phone;
 
@@ -733,9 +846,10 @@ export class ZaloClientManager {
    * Search user / friend by alias (tên gợi nhớ / mã học viên), lấy ra người đầu tiên
    */
   public async findUserByAlias(aliasQuery: string) {
-    if (!this.api) {
-      throw new Error('Chưa đăng nhập Zalo.');
-    }
+    return this.withSession('findUserByAlias', () => this.findUserByAliasInternal(aliasQuery));
+  }
+
+  private async findUserByAliasInternal(aliasQuery: string) {
     const clean = String(aliasQuery || '').trim().toLowerCase();
     if (!clean) return null;
 
@@ -757,7 +871,9 @@ export class ZaloClientManager {
           raw: matched,
         };
       }
-    } catch {}
+    } catch (aliasErr) {
+      if (isSessionInvalidError(aliasErr)) throw aliasErr;
+    }
 
     // 2. Quét qua getFriends()
     try {
@@ -780,7 +896,9 @@ export class ZaloClientManager {
           raw: matched,
         };
       }
-    } catch {}
+    } catch (friendErr) {
+      if (isSessionInvalidError(friendErr)) throw friendErr;
+    }
 
     return null;
   }
@@ -790,7 +908,7 @@ export class ZaloClientManager {
    */
   public async getAliases() {
     if (!this.api) {
-      throw new Error('Chưa đăng nhập Zalo.');
+      throw new ZaloSessionInvalidError(ZALO_NOT_LOGGED_IN_MESSAGE);
     }
     let page = 1;
     let allItems: any[] = [];
@@ -806,6 +924,7 @@ export class ZaloClientManager {
         allItems = allItems.concat(items);
         page++;
       } catch (err: any) {
+        if (isSessionInvalidError(err)) throw err;
         console.warn(`[getAliases] Error on page ${page}:`, err.message);
         break;
       }
@@ -818,7 +937,7 @@ export class ZaloClientManager {
    */
   public async setAlias(userId: string, alias: string) {
     if (!this.api) {
-      throw new Error('Chưa đăng nhập Zalo.');
+      throw new ZaloSessionInvalidError(ZALO_NOT_LOGGED_IN_MESSAGE);
     }
     return await (this.api as any).changeFriendAlias(alias, userId);
   }
@@ -828,7 +947,7 @@ export class ZaloClientManager {
    */
   public async getStickersDetail(stickerId: number) {
     if (!this.api) {
-      throw new Error('Chưa đăng nhập Zalo.');
+      throw new ZaloSessionInvalidError(ZALO_NOT_LOGGED_IN_MESSAGE);
     }
     return await this.api.getStickersDetail(stickerId);
   }
@@ -838,7 +957,7 @@ export class ZaloClientManager {
    */
   public async getStickerCategoryDetail(cateId: number) {
     if (!this.api) {
-      throw new Error('Chưa đăng nhập Zalo.');
+      throw new ZaloSessionInvalidError(ZALO_NOT_LOGGED_IN_MESSAGE);
     }
     return await (this.api as any).getStickerCategoryDetail(cateId);
   }
@@ -848,7 +967,7 @@ export class ZaloClientManager {
    */
   public async sendSticker(threadId: string, stickerId: number, threadType?: number) {
     if (!this.api) {
-      throw new Error('Chưa đăng nhập Zalo.');
+      throw new ZaloSessionInvalidError(ZALO_NOT_LOGGED_IN_MESSAGE);
     }
     const stickersDetail: any = await this.api.getStickersDetail(stickerId);
     if (!stickersDetail || stickersDetail.length === 0) {
@@ -862,7 +981,7 @@ export class ZaloClientManager {
    */
   public async getGroupMembers(groupId: string) {
     if (!this.api) {
-      throw new Error('Chưa đăng nhập Zalo.');
+      throw new ZaloSessionInvalidError(ZALO_NOT_LOGGED_IN_MESSAGE);
     }
     const groupInfo: any = await this.api.getGroupInfo(groupId);
     const gridInfo = groupInfo?.gridInfo || groupInfo;

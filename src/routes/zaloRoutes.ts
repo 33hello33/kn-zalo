@@ -2,10 +2,41 @@ import { Router, Request, Response } from 'express';
 import multer from 'multer';
 import fs from 'fs';
 import path from 'path';
-import { ZaloClientManager } from '../services/ZaloClientManager';
+import {
+  ZaloClientManager,
+  ZaloSessionInvalidError,
+  isSessionInvalidError,
+  ZALO_SESSION_INVALID_CODE,
+  ZALO_SESSION_INVALID_MESSAGE,
+} from '../services/ZaloClientManager';
 import { ZaloMessageStore } from '../services/ZaloMessageStore';
 
 const router = Router();
+
+/**
+ * Trả lỗi thống nhất: phiên Zalo hết hiệu lực (zpw_sek) => 401 + code để giao diện
+ * hiển thị đúng thông báo "quét QR đăng nhập lại" thay vì lỗi kỹ thuật khó hiểu.
+ */
+const sendZaloError = (res: Response, error: any, fallbackMessage: string, status = 500) => {
+  const sessionInvalid =
+    error instanceof ZaloSessionInvalidError ||
+    error?.code === ZALO_SESSION_INVALID_CODE ||
+    isSessionInvalidError(error);
+
+  if (sessionInvalid) {
+    return res.status(401).json({
+      success: false,
+      code: ZALO_SESSION_INVALID_CODE,
+      sessionExpired: true,
+      error: error?.message || ZALO_SESSION_INVALID_MESSAGE,
+    });
+  }
+
+  return res.status(status).json({
+    success: false,
+    error: error?.message || fallbackMessage,
+  });
+};
 
 // Helper to extract appId from request headers or query params
 const getAppId = (req: Request): string => {
@@ -115,10 +146,7 @@ router.get('/friends', async (req: Request, res: Response) => {
       friends,
     });
   } catch (error: any) {
-    return res.status(400).json({
-      success: false,
-      error: error.message || 'Lỗi khi lấy danh sách bạn bè',
-    });
+    return sendZaloError(res, error, 'Lỗi khi lấy danh sách bạn bè', 400);
   }
 });
 
@@ -166,10 +194,7 @@ router.get('/search-phone', async (req: Request, res: Response) => {
       contact,
     });
   } catch (error: any) {
-    return res.status(500).json({
-      success: false,
-      error: error.message || 'Lỗi khi tìm kiếm người dùng theo số điện thoại / mã học viên',
-    });
+    return sendZaloError(res, error, 'Lỗi khi tìm kiếm người dùng theo số điện thoại / mã học viên');
   }
 });
 
@@ -206,10 +231,7 @@ router.get('/search-alias', async (req: Request, res: Response) => {
       contact,
     });
   } catch (error: any) {
-    return res.status(500).json({
-      success: false,
-      error: error.message || 'Lỗi khi tìm kiếm người dùng theo alias',
-    });
+    return sendZaloError(res, error, 'Lỗi khi tìm kiếm người dùng theo alias');
   }
 });
 
@@ -227,10 +249,7 @@ router.get('/groups', async (req: Request, res: Response) => {
       groups,
     });
   } catch (error: any) {
-    return res.status(400).json({
-      success: false,
-      error: error.message || 'Lỗi khi lấy danh sách nhóm',
-    });
+    return sendZaloError(res, error, 'Lỗi khi lấy danh sách nhóm', 400);
   }
 });
 
@@ -273,10 +292,7 @@ router.post('/send-message', async (req: Request, res: Response) => {
       result,
     });
   } catch (error: any) {
-    return res.status(500).json({
-      success: false,
-      error: error.message || 'Gửi tin nhắn thất bại',
-    });
+    return sendZaloError(res, error, 'Gửi tin nhắn thất bại');
   }
 });
 
@@ -309,10 +325,7 @@ router.post('/send-image', upload.fields([{ name: 'file', maxCount: 1 }, { name:
       result,
     });
   } catch (error: any) {
-    return res.status(500).json({
-      success: false,
-      error: error.message || 'Gửi ảnh thất bại',
-    });
+    return sendZaloError(res, error, 'Gửi ảnh thất bại');
   } finally {
     if (tempFilePath && fs.existsSync(tempFilePath)) {
       try {
@@ -350,10 +363,7 @@ router.post('/send-file', upload.single('file'), async (req: Request, res: Respo
       result,
     });
   } catch (error: any) {
-    return res.status(500).json({
-      success: false,
-      error: error.message || 'Gửi file thất bại',
-    });
+    return sendZaloError(res, error, 'Gửi file thất bại');
   } finally {
     if (tempFilePath && fs.existsSync(tempFilePath)) {
       try {
